@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-TMUXSAVER_VERSION="0.3.1"
+TMUXSAVER_VERSION="0.3.2"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -81,7 +81,7 @@ cmd_save() {
 
 cmd_restore() {
     command -v tmux &>/dev/null || { warn "tmux is not installed"; return 0; }
-    tmux info &>/dev/null 2>&1  || { info "No tmux server running — skipping restore"; return 0; }
+    tmux info &>/dev/null 2>&1  || tmux start-server
 
     [[ -d "$SAVE_DIR" ]] || {
         info "No saved sessions found at $SAVE_DIR"
