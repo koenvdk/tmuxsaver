@@ -21,10 +21,12 @@ A minimal tmux session saver. Saves the **working directory** and **shell histor
 Download the `.deb` from the [releases page](https://github.com/<you>/tmuxsaver/releases) and install:
 
 ```bash
-sudo dpkg -i tmuxsaver_0.2.0_all.deb
+wget -P /tmp https://github.com/<you>/tmuxsaver/releases/download/v0.2.0/tmuxsaver_0.2.0_all.deb
+sudo apt install /tmp/tmuxsaver_0.2.0_all.deb
 ```
 
-If `tmux` is not yet installed, resolve it afterwards with `sudo apt-get install -f`.
+> **Note:** `apt install` requires the file to be outside your home directory
+> (`_apt` sandbox restriction). Downloading directly to `/tmp` avoids the issue.
 
 The installer automatically:
 - enables `tmuxsaver-save.service` (save on logout) for all users
