@@ -1,16 +1,18 @@
 #!/bin/bash
 set -e
 
-# ── Disable services ──────────────────────────────────────────────────────────
+# ── Disable and stop services ─────────────────────────────────────────────────
 if command -v systemctl &>/dev/null; then
     systemctl --global disable tmuxsaver-save.service    2>/dev/null || true
     systemctl --global disable tmuxsaver-restore.service 2>/dev/null || true
+    systemctl --user   stop    tmuxsaver-save.service    2>/dev/null || true
+    systemctl --user   daemon-reload                     2>/dev/null || true
 fi
 
-# ── Remove shell hook from rc files ──────────────────────────────────────────
 if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 
+    # ── Remove shell hook from rc files ──────────────────────────────────────
     for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
         [[ -f "$rcfile" ]] || continue
         python3 - "$rcfile" <<'PYEOF'
@@ -24,7 +26,28 @@ PYEOF
         echo "tmuxsaver: removed shell hook from $rcfile"
     done
 
-    # ── Session data ─────────────────────────────────────────────────────────
+    # ── Remove tmux.conf hook ─────────────────────────────────────────────────
+    TMUX_CONF="$USER_HOME/.tmux.conf"
+    if [[ -f "$TMUX_CONF" ]] && grep -qF "tmuxsaver" "$TMUX_CONF"; then
+        python3 - "$TMUX_CONF" <<'PYEOF'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+content = p.read_text()
+content = re.sub(r'\n# tmuxsaver:.*\nset-hook.*tmuxsaver.*\n', '\n', content)
+p.write_text(content)
+PYEOF
+        echo "tmuxsaver: removed hook from $TMUX_CONF"
+    fi
+
+    # ── Remove manually installed binary if present ───────────────────────────
+    for binpath in "$USER_HOME/.local/bin/tmuxsaver" "/usr/local/bin/tmuxsaver"; do
+        if [[ -f "$binpath" ]]; then
+            rm -f "$binpath"
+            echo "tmuxsaver: removed $binpath"
+        fi
+    done
+
+    # ── Session data ──────────────────────────────────────────────────────────
     SESSION_DIR="$USER_HOME/.tmuxsaver"
     if [[ -d "$SESSION_DIR" ]]; then
         echo ""
