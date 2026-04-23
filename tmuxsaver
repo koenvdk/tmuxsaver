@@ -15,9 +15,9 @@
 #   --dir <path>  Override save directory (default: ~/.tmuxsaver)
 #   --quiet       Suppress informational output
 
-set -euo pipefail
+set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.0"
+TMUXSAVER_VERSION="0.4.1"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -191,7 +191,7 @@ cmd_setup_tmux() {
         return 0
     fi
 
-    printf '\n%s\nset-hook -ga client-detached "run-shell \\"tmuxsaver save --quiet\\""\n' \
+    printf '\n%s\nset-hook -ga client-detached "run-shell \\"tmuxsaver save --quiet || true\\""\n' \
         "$marker" >> "$tmux_conf"
     info "Added save-on-detach hook to $tmux_conf"
     info "Reload now with: tmux source-file $tmux_conf"

@@ -1,7 +1,42 @@
 #!/bin/bash
 set -e
 
+# ── Disable services ──────────────────────────────────────────────────────────
 if command -v systemctl &>/dev/null; then
     systemctl --global disable tmuxsaver-save.service    2>/dev/null || true
     systemctl --global disable tmuxsaver-restore.service 2>/dev/null || true
 fi
+
+# ── Remove shell hook from rc files ──────────────────────────────────────────
+if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
+    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+
+    for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
+        [[ -f "$rcfile" ]] || continue
+        python3 - "$rcfile" <<'PYEOF'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+content = p.read_text()
+content = re.sub(r'\n# tmuxsaver:begin.*?# tmuxsaver:end\n', '\n', content, flags=re.DOTALL)
+content = re.sub(r'\n# tmuxsaver shell integration.*?^fi\n', '\n', content, flags=re.DOTALL | re.MULTILINE)
+p.write_text(content)
+PYEOF
+        echo "tmuxsaver: removed shell hook from $rcfile"
+    done
+
+    # ── Session data ─────────────────────────────────────────────────────────
+    SESSION_DIR="$USER_HOME/.tmuxsaver"
+    if [[ -d "$SESSION_DIR" ]]; then
+        echo ""
+        echo "tmuxsaver: saved session data found at $SESSION_DIR"
+        read -r -p "Remove saved session data? [y/N] " answer
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+            rm -rf "$SESSION_DIR"
+            echo "tmuxsaver: session data removed"
+        else
+            echo "tmuxsaver: session data kept at $SESSION_DIR"
+        fi
+    fi
+fi
+
+echo ""
