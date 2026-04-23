@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-TMUXSAVER_VERSION="0.1.0"
+TMUXSAVER_VERSION="0.2.0"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
