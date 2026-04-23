@@ -7,15 +7,18 @@ if [[ -n "${TMUX:-}" ]]; then
         mkdir -p "$(dirname "$HISTFILE")"
     fi
     unset _ts_session
-elif [[ -z "${TMUXSAVER_NO_ATTACH:-}" ]] && command -v tmux &>/dev/null; then
-    # Outside tmux: restore saved sessions and auto-attach
+elif [[ "${TMUXSAVER_AUTO_ATTACH:-0}" == "1" ]] && command -v tmux &>/dev/null; then
+    # Outside tmux: restore saved sessions and auto-attach (opt-in: set TMUXSAVER_AUTO_ATTACH=1)
     _ts_dir="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
     if [[ -d "$_ts_dir" ]] && [[ -n "$(ls -A "$_ts_dir" 2>/dev/null)" ]]; then
         if ! tmux has-session 2>/dev/null; then
             tmux start-server
             tmuxsaver restore --quiet 2>/dev/null
         fi
-        exec tmux attach
+        # Only attach if sessions actually exist — never exec into a void
+        if tmux has-session 2>/dev/null; then
+            exec tmux attach
+        fi
     fi
     unset _ts_dir
 fi

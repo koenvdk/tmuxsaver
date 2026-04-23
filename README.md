@@ -63,10 +63,10 @@ tmuxsaver setup-tmux    # add save-on-detach hook to ~/.tmux.conf
 - Whenever you detach from tmux (`tmux detach` or closing the terminal), a hook in `~/.tmux.conf` runs `tmuxsaver save`
 - On logout/shutdown, the systemd user service saves as a fallback
 
-**Restoring** happens automatically on login:
-- The shell hook detects saved sessions, starts a tmux server if needed, restores sessions, and runs `exec tmux attach` — so your terminal drops straight into tmux
-
-Set `TMUXSAVER_NO_ATTACH=1` in a specific terminal to suppress auto-attach for that session.
+**Restoring** on login requires one of:
+- `tmuxsaver restore` — manual, creates sessions in the background; then `tmux attach`
+- `systemctl --user enable --now tmuxsaver-restore.service` — restores at login via systemd
+- `TMUXSAVER_AUTO_ATTACH=1` in `~/.bashrc` or `~/.profile` — shell hook restores and attaches automatically (opt-in; only attaches if sessions actually exist)
 
 ## Saved data layout
 
