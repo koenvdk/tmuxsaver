@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+if command -v systemctl &>/dev/null; then
+    systemctl --global disable tmuxsaver-save.service    2>/dev/null || true
+    systemctl --global disable tmuxsaver-restore.service 2>/dev/null || true
+fi
