@@ -1,6 +1,4 @@
-# tmuxsaver shell integration — source from ~/.bashrc or ~/.zshrc
-# Run `tmuxsaver setup-shell` to print this snippet.
-
+# tmuxsaver:begin — shell integration (managed by tmuxsaver, do not edit this block)
 if [[ -n "${TMUX:-}" ]]; then
     # Inside tmux: give each session its own history file
     _ts_session=$(tmux display-message -p '#S' 2>/dev/null)
@@ -21,3 +19,4 @@ elif [[ -z "${TMUXSAVER_NO_ATTACH:-}" ]] && command -v tmux &>/dev/null; then
     fi
     unset _ts_dir
 fi
+# tmuxsaver:end

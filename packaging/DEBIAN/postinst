@@ -2,7 +2,8 @@
 set -e
 
 SNIPPET=/usr/share/tmuxsaver/tmuxsaver.sh
-MARKER="# tmuxsaver shell integration"
+BEGIN_MARKER="# tmuxsaver:begin"
+END_MARKER="# tmuxsaver:end"
 
 # ── Systemd: enable save-on-logout for all users ─────────────────────────────
 if command -v systemctl &>/dev/null; then
@@ -11,22 +12,43 @@ if command -v systemctl &>/dev/null; then
 fi
 
 # ── Per-user setup ────────────────────────────────────────────────────────────
-# SUDO_USER is set when the user ran `sudo apt install`.
 if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 
-    # Shell hook: append to rc files
     for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
         [[ -f "$rcfile" ]] || continue
-        if grep -qF "$MARKER" "$rcfile"; then
-            echo "tmuxsaver: shell hook already present in $rcfile — skipping"
-        else
-            { echo ""; cat "$SNIPPET"; } >> "$rcfile"
-            echo "tmuxsaver: shell hook appended to $rcfile"
-        fi
+
+        # Remove any existing tmuxsaver block (old or new style) then re-append.
+        # Old style had no end marker; new style has tmuxsaver:begin/end.
+        # Python handles the multi-line removal cleanly.
+        python3 - "$rcfile" "$SNIPPET" <<'PYEOF'
+import re, sys, pathlib
+
+rcfile  = pathlib.Path(sys.argv[1])
+snippet = pathlib.Path(sys.argv[2]).read_text()
+content = rcfile.read_text()
+
+# Remove block between new-style markers (inclusive)
+content = re.sub(
+    r'\n# tmuxsaver:begin.*?# tmuxsaver:end\n',
+    '\n',
+    content,
+    flags=re.DOTALL,
+)
+# Remove old-style block (no end marker): from first tmuxsaver comment to closing fi
+content = re.sub(
+    r'\n# tmuxsaver shell integration.*?^fi\n',
+    '\n',
+    content,
+    flags=re.DOTALL | re.MULTILINE,
+)
+
+rcfile.write_text(content.rstrip('\n') + '\n\n' + snippet)
+PYEOF
+        echo "tmuxsaver: shell hook updated in $rcfile"
     done
 
-    # tmux hook: add save-on-detach to ~/.tmux.conf
+    # tmux save-on-detach hook
     sudo -u "$SUDO_USER" tmuxsaver setup-tmux 2>/dev/null || true
 fi
 
@@ -35,9 +57,8 @@ echo "tmuxsaver installed."
 echo "  - Sessions are saved automatically when you detach from tmux."
 echo "  - On next login, your terminal will auto-attach to restored sessions."
 echo ""
-echo "To also save on logout (belt-and-suspenders):"
-echo "  systemctl --user enable --now tmuxsaver-save.service"
+echo "Reload your shell now:  source ~/.bashrc"
 echo ""
-echo "To restore sessions on login automatically:"
+echo "Optional — restore sessions on login via systemd:"
 echo "  systemctl --user enable --now tmuxsaver-restore.service"
 echo ""

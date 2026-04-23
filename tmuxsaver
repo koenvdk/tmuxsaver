@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-TMUXSAVER_VERSION="0.3.0"
+TMUXSAVER_VERSION="0.3.1"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -174,32 +174,8 @@ cmd_clean() {
 # ---------------------------------------------------------------------------
 
 cmd_setup_shell() {
-    cat <<'SNIPPET'
-# ---------------------------------------------------------------------------
-# tmuxsaver shell integration — add to ~/.bashrc or ~/.zshrc
-# ---------------------------------------------------------------------------
-if [[ -n "${TMUX:-}" ]]; then
-    # Inside tmux: give each session its own history file
-    _ts_session=$(tmux display-message -p '#S' 2>/dev/null)
-    if [[ -n "$_ts_session" ]]; then
-        export HISTFILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions/$_ts_session/history"
-        mkdir -p "$(dirname "$HISTFILE")"
-    fi
-    unset _ts_session
-elif [[ -z "${TMUXSAVER_NO_ATTACH:-}" ]] && command -v tmux &>/dev/null; then
-    # Outside tmux: restore saved sessions and auto-attach
-    _ts_dir="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
-    if [[ -d "$_ts_dir" ]] && [[ -n "$(ls -A "$_ts_dir" 2>/dev/null)" ]]; then
-        if ! tmux has-session 2>/dev/null; then
-            tmux start-server
-            tmuxsaver restore --quiet 2>/dev/null
-        fi
-        exec tmux attach
-    fi
-    unset _ts_dir
-fi
-# ---------------------------------------------------------------------------
-SNIPPET
+    cat /usr/share/tmuxsaver/tmuxsaver.sh 2>/dev/null || \
+        cat "$(dirname "$(realpath "$0")")/shell/tmuxsaver.sh"
 }
 
 # ---------------------------------------------------------------------------

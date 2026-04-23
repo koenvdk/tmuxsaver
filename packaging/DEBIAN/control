@@ -1,5 +1,5 @@
 Package: tmuxsaver
-Version: 0.3.0
+Version: 0.3.1
 Architecture: all
 Maintainer: Koen Van der Kimpen <koen.vanderkimpen@smals.be>
 Depends: tmux, bash (>= 4.0)
