@@ -9,6 +9,7 @@
 #   list          List saved sessions
 #   clean         Remove all saved session data
 #   setup-shell   Print the shell integration snippet
+#   setup-tmux    Add save-on-detach hook to ~/.tmux.conf
 #
 # Options:
 #   --dir <path>  Override save directory (default: ~/.tmuxsaver)
@@ -16,7 +17,7 @@
 
 set -euo pipefail
 
-TMUXSAVER_VERSION="0.2.1"
+TMUXSAVER_VERSION="0.3.0"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -56,17 +57,13 @@ cmd_save() {
         local session_dir="$SAVE_DIR/$session"
         mkdir -p "$session_dir"
 
-        # --- Working directory: use the most recently active pane ---
+        # Working directory: use the most recently active pane
         local workdir
         workdir=$(tmux display-message -t "$session" -p '#{pane_current_path}' 2>/dev/null) || continue
         echo "$workdir" > "$session_dir/workdir"
 
-        # --- History: read per-session HISTFILE if it already exists ---
-        # (Set up via shell integration; see `tmuxsaver setup-shell`)
-        # We do NOT inject keystrokes into the user's terminal.
         local histfile="$session_dir/history"
         if [[ -f "$histfile" ]]; then
-            # File is maintained live by the shell; nothing to do.
             info "Saved session '$session': $workdir (history present)"
         else
             info "Saved session '$session': $workdir (no per-session history — run 'tmuxsaver setup-shell' to enable)"
@@ -105,24 +102,21 @@ cmd_restore() {
         local workdir
         workdir=$(cat "$workdir_file")
 
-        # Skip sessions that already exist in the running tmux server
         if tmux has-session -t "$session" 2>/dev/null; then
             info "Session '$session' already exists — skipping"
             continue
         fi
 
-        # Fall back to HOME if the saved directory no longer exists
         if [[ ! -d "$workdir" ]]; then
             warn "Saved workdir '$workdir' for session '$session' no longer exists; using \$HOME"
             workdir="$HOME"
         fi
 
-        # Create the session detached, at the saved working directory
         tmux new-session -d -s "$session" -c "$workdir"
 
-        # If a per-session history file exists, point the new shell at it.
-        # We send the command with a leading space so it is not recorded in
-        # history itself (requires HISTCONTROL=ignorespace or ignoreboth).
+        # Point the new shell at the saved history file.
+        # Leading space avoids adding this command to history itself
+        # (requires HISTCONTROL=ignorespace or ignoreboth).
         if [[ -f "$histfile" ]]; then
             tmux send-keys -t "$session" \
                 " export HISTFILE='$histfile'; history -c; history -r; history -s ''" \
@@ -182,20 +176,49 @@ cmd_clean() {
 cmd_setup_shell() {
     cat <<'SNIPPET'
 # ---------------------------------------------------------------------------
-# tmuxsaver shell integration
-# Add this block to your ~/.bashrc or ~/.zshrc
-# It gives each tmux session its own history file stored in ~/.tmuxsaver
+# tmuxsaver shell integration — add to ~/.bashrc or ~/.zshrc
 # ---------------------------------------------------------------------------
 if [[ -n "${TMUX:-}" ]]; then
+    # Inside tmux: give each session its own history file
     _ts_session=$(tmux display-message -p '#S' 2>/dev/null)
     if [[ -n "$_ts_session" ]]; then
         export HISTFILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions/$_ts_session/history"
         mkdir -p "$(dirname "$HISTFILE")"
     fi
     unset _ts_session
+elif [[ -z "${TMUXSAVER_NO_ATTACH:-}" ]] && command -v tmux &>/dev/null; then
+    # Outside tmux: restore saved sessions and auto-attach
+    _ts_dir="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
+    if [[ -d "$_ts_dir" ]] && [[ -n "$(ls -A "$_ts_dir" 2>/dev/null)" ]]; then
+        if ! tmux has-session 2>/dev/null; then
+            tmux start-server
+            tmuxsaver restore --quiet 2>/dev/null
+        fi
+        exec tmux attach
+    fi
+    unset _ts_dir
 fi
 # ---------------------------------------------------------------------------
 SNIPPET
+}
+
+# ---------------------------------------------------------------------------
+# Setup-tmux
+# ---------------------------------------------------------------------------
+
+cmd_setup_tmux() {
+    local tmux_conf="$HOME/.tmux.conf"
+    local marker="# tmuxsaver: save on detach"
+
+    if grep -qF "$marker" "$tmux_conf" 2>/dev/null; then
+        info "tmux hook already present in $tmux_conf"
+        return 0
+    fi
+
+    printf '\n%s\nset-hook -ga client-detached "run-shell \\"tmuxsaver save --quiet\\""\n' \
+        "$marker" >> "$tmux_conf"
+    info "Added save-on-detach hook to $tmux_conf"
+    info "Reload now with: tmux source-file $tmux_conf"
 }
 
 # ---------------------------------------------------------------------------
@@ -206,7 +229,7 @@ COMMAND=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        save|restore|list|clean|setup-shell)
+        save|restore|list|clean|setup-shell|setup-tmux)
             COMMAND="$1"
             shift
             ;;
@@ -224,7 +247,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         --help|-h)
-            sed -n '2,11p' "$0"  # print the usage comment at the top
+            sed -n '2,12p' "$0"
             exit 0
             ;;
         *)
@@ -233,12 +256,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$COMMAND" ]] || { sed -n '2,11p' "$0"; exit 1; }
+[[ -n "$COMMAND" ]] || { sed -n '2,12p' "$0"; exit 1; }
 
 case "$COMMAND" in
-    save)        cmd_save ;;
-    restore)     cmd_restore ;;
-    list)        cmd_list ;;
-    clean)       cmd_clean ;;
-    setup-shell) cmd_setup_shell ;;
+    save)         cmd_save ;;
+    restore)      cmd_restore ;;
+    list)         cmd_list ;;
+    clean)        cmd_clean ;;
+    setup-shell)  cmd_setup_shell ;;
+    setup-tmux)   cmd_setup_tmux ;;
 esac
