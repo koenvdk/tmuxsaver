@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# tmuxsaver - minimal tmux session saver
+# Saves working directory and bash/zsh history per session.
+# No windows, panes, or running programs are preserved.
+#
+# Usage: tmuxsaver <command> [options]
+#   save          Save all current tmux sessions
+#   restore       Restore previously saved sessions
+#   list          List saved sessions
+#   clean         Remove all saved session data
+#   setup-shell   Print the shell integration snippet
+#
+# Options:
+#   --dir <path>  Override save directory (default: ~/.tmuxsaver)
+#   --quiet       Suppress informational output
+
+set -euo pipefail
+
+TMUXSAVER_VERSION="0.1.0"
+SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
+QUIET=0
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+log()  { [[ $QUIET -eq 0 ]] && echo "$*" >&2 || true; }
+info() { log "[tmuxsaver] $*"; }
+warn() { echo "[tmuxsaver] WARNING: $*" >&2; }
+die()  { echo "[tmuxsaver] ERROR: $*" >&2; exit 1; }
+
+require_tmux() {
+    command -v tmux &>/dev/null || die "tmux is not installed or not in PATH"
+    tmux info &>/dev/null 2>&1 || die "no tmux server is running"
+}
+
+# ---------------------------------------------------------------------------
+# Save
+# ---------------------------------------------------------------------------
+
+cmd_save() {
+    require_tmux
+
+    local sessions
+    sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null) || {
+        info "No active tmux sessions to save."
+        return 0
+    }
+
+    mkdir -p "$SAVE_DIR"
+    local count=0
+
+    while IFS= read -r session; do
+        [[ -z "$session" ]] && continue
+
+        local session_dir="$SAVE_DIR/$session"
+        mkdir -p "$session_dir"
+
+        # --- Working directory: use the most recently active pane ---
+        local workdir
+        workdir=$(tmux display-message -t "$session" -p '#{pane_current_path}' 2>/dev/null) || continue
+        echo "$workdir" > "$session_dir/workdir"
+
+        # --- History: read per-session HISTFILE if it already exists ---
+        # (Set up via shell integration; see `tmuxsaver setup-shell`)
+        # We do NOT inject keystrokes into the user's terminal.
+        local histfile="$session_dir/history"
+        if [[ -f "$histfile" ]]; then
+            # File is maintained live by the shell; nothing to do.
+            info "Saved session '$session': $workdir (history present)"
+        else
+            info "Saved session '$session': $workdir (no per-session history — run 'tmuxsaver setup-shell' to enable)"
+        fi
+
+        count=$(( count + 1 ))
+    done <<< "$sessions"
+
+    info "Saved $count session(s) to $SAVE_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Restore
+# ---------------------------------------------------------------------------
+
+cmd_restore() {
+    require_tmux
+
+    [[ -d "$SAVE_DIR" ]] || {
+        info "No saved sessions found at $SAVE_DIR"
+        return 0
+    }
+
+    local count=0
+
+    for session_dir in "$SAVE_DIR"/*/; do
+        [[ -d "$session_dir" ]] || continue
+
+        local session
+        session=$(basename "$session_dir")
+        local workdir_file="$session_dir/workdir"
+        local histfile="$session_dir/history"
+
+        [[ -f "$workdir_file" ]] || { warn "Skipping '$session': no workdir file"; continue; }
+        local workdir
+        workdir=$(cat "$workdir_file")
+
+        # Skip sessions that already exist in the running tmux server
+        if tmux has-session -t "$session" 2>/dev/null; then
+            info "Session '$session' already exists — skipping"
+            continue
+        fi
+
+        # Fall back to HOME if the saved directory no longer exists
+        if [[ ! -d "$workdir" ]]; then
+            warn "Saved workdir '$workdir' for session '$session' no longer exists; using \$HOME"
+            workdir="$HOME"
+        fi
+
+        # Create the session detached, at the saved working directory
+        tmux new-session -d -s "$session" -c "$workdir"
+
+        # If a per-session history file exists, point the new shell at it.
+        # We send the command with a leading space so it is not recorded in
+        # history itself (requires HISTCONTROL=ignorespace or ignoreboth).
+        if [[ -f "$histfile" ]]; then
+            tmux send-keys -t "$session" \
+                " export HISTFILE='$histfile'; history -c; history -r; history -s ''" \
+                Enter
+        fi
+
+        info "Restored session '$session' at $workdir"
+        count=$(( count + 1 ))
+    done
+
+    info "Restored $count session(s)"
+}
+
+# ---------------------------------------------------------------------------
+# List
+# ---------------------------------------------------------------------------
+
+cmd_list() {
+    [[ -d "$SAVE_DIR" ]] || { echo "No saved sessions."; return 0; }
+
+    local found=0
+    for session_dir in "$SAVE_DIR"/*/; do
+        [[ -d "$session_dir" ]] || continue
+        local session
+        session=$(basename "$session_dir")
+        local workdir="(unknown)"
+        [[ -f "$session_dir/workdir" ]] && workdir=$(cat "$session_dir/workdir")
+        local has_history="no"
+        [[ -f "$session_dir/history" ]] && has_history="yes"
+        printf "  %-20s  %s  (history: %s)\n" "$session" "$workdir" "$has_history"
+        found=$(( found + 1 ))
+    done
+
+    [[ $found -eq 0 ]] && echo "No saved sessions."
+}
+
+# ---------------------------------------------------------------------------
+# Clean
+# ---------------------------------------------------------------------------
+
+cmd_clean() {
+    [[ -d "$SAVE_DIR" ]] || { info "Nothing to clean."; return 0; }
+
+    if [[ $QUIET -eq 0 ]]; then
+        read -r -p "[tmuxsaver] Remove all saved session data at $SAVE_DIR? [y/N] " answer
+        [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted."; return 0; }
+    fi
+
+    rm -rf "$SAVE_DIR"
+    info "Cleaned $SAVE_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Setup-shell
+# ---------------------------------------------------------------------------
+
+cmd_setup_shell() {
+    cat <<'SNIPPET'
+# ---------------------------------------------------------------------------
+# tmuxsaver shell integration
+# Add this block to your ~/.bashrc or ~/.zshrc
+# It gives each tmux session its own history file stored in ~/.tmuxsaver
+# ---------------------------------------------------------------------------
+if [[ -n "${TMUX:-}" ]]; then
+    _ts_session=$(tmux display-message -p '#S' 2>/dev/null)
+    if [[ -n "$_ts_session" ]]; then
+        export HISTFILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions/$_ts_session/history"
+        mkdir -p "$(dirname "$HISTFILE")"
+    fi
+    unset _ts_session
+fi
+# ---------------------------------------------------------------------------
+SNIPPET
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+COMMAND=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        save|restore|list|clean|setup-shell)
+            COMMAND="$1"
+            shift
+            ;;
+        --dir)
+            [[ -n "${2:-}" ]] || die "--dir requires a path argument"
+            SAVE_DIR="$2/sessions"
+            shift 2
+            ;;
+        --quiet|-q)
+            QUIET=1
+            shift
+            ;;
+        --version|-v)
+            echo "tmuxsaver $TMUXSAVER_VERSION"
+            exit 0
+            ;;
+        --help|-h)
+            sed -n '2,11p' "$0"  # print the usage comment at the top
+            exit 0
+            ;;
+        *)
+            die "Unknown argument: $1 (try --help)"
+            ;;
+    esac
+done
+
+[[ -n "$COMMAND" ]] || { sed -n '2,11p' "$0"; exit 1; }
+
+case "$COMMAND" in
+    save)        cmd_save ;;
+    restore)     cmd_restore ;;
+    list)        cmd_list ;;
+    clean)       cmd_clean ;;
+    setup-shell) cmd_setup_shell ;;
+esac

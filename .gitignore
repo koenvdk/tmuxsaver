@@ -1,0 +1,8 @@
+# Editor artifacts
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local test data
+/test-sessions/

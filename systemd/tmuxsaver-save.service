@@ -1,0 +1,17 @@
+[Unit]
+Description=Save tmux sessions before logout / shutdown
+# Run as late as possible during user-session teardown
+DefaultDependencies=no
+Before=default.target
+
+[Service]
+Type=oneshot
+# RemainAfterExit lets systemd call ExecStop when the unit is stopped
+# (i.e. on logout or shutdown).
+RemainAfterExit=yes
+# Start is a no-op; the real work happens in ExecStop.
+ExecStart=/bin/true
+ExecStop=%h/.local/bin/tmuxsaver save --quiet
+
+[Install]
+WantedBy=default.target
