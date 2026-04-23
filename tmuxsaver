@@ -83,7 +83,8 @@ cmd_save() {
 # ---------------------------------------------------------------------------
 
 cmd_restore() {
-    require_tmux
+    command -v tmux &>/dev/null || { warn "tmux is not installed"; return 0; }
+    tmux info &>/dev/null 2>&1  || { info "No tmux server running — skipping restore"; return 0; }
 
     [[ -d "$SAVE_DIR" ]] || {
         info "No saved sessions found at $SAVE_DIR"

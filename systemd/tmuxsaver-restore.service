@@ -1,13 +1,12 @@
 [Unit]
 Description=Restore tmux sessions on login
-# Wait until the graphical or text session is fully up
 After=default.target
 
 [Service]
 Type=oneshot
-# Only restore if a tmux server is already running (e.g. started by tmux.service
-# or manually). Does nothing if no server is present.
-ExecStart=/usr/bin/tmuxsaver restore --quiet
+# Start a headless tmux server if none is running, then restore sessions.
+# The server stays alive in the background; attach with: tmux attach
+ExecStart=/bin/bash -c 'tmux start-server; /usr/bin/tmuxsaver restore --quiet'
 
 [Install]
 WantedBy=default.target
