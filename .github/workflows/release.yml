@@ -32,7 +32,7 @@ jobs:
             Download the `.deb` below and install with:
 
             ```bash
-            sudo apt install ./tmuxsaver_${{ steps.version.outputs.version }}_all.deb
+            sudo dpkg -i tmuxsaver_${{ steps.version.outputs.version }}_all.deb
             ```
 
             Then follow the post-install instructions to enable the systemd service
