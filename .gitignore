@@ -4,5 +4,9 @@
 *~
 .DS_Store
 
+# Build artifacts
+*.deb
+/packaging/usr/
+
 # Local test data
 /test-sessions/

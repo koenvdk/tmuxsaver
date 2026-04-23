@@ -1,0 +1,16 @@
+Package: tmuxsaver
+Version: 0.1.0
+Architecture: all
+Maintainer: Koen Van der Kimpen <koen.vanderkimpen@smals.be>
+Depends: tmux, bash (>= 4.0)
+Recommends: systemd
+Section: utils
+Priority: optional
+Homepage: https://github.com/kvanderkimpen/tmuxsaver
+Description: Minimal tmux session saver focused on working directory and shell history
+ Saves the working directory and bash/zsh history for each tmux session.
+ No window or pane layout is preserved — just enough context to get back
+ to where you were after a reboot.
+ .
+ Includes optional systemd user services for automatic save on logout
+ and restore on login.

@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+echo ""
+echo "tmuxsaver installed."
+echo ""
+echo "Next steps:"
+echo ""
+echo "  1. Enable automatic save on logout (systemd user service):"
+echo "     systemctl --user enable --now tmuxsaver-save.service"
+echo ""
+echo "  2. Enable per-session shell history (add to ~/.bashrc or ~/.zshrc):"
+echo "     tmuxsaver setup-shell"
+echo ""
+echo "  3. Optionally enable auto-restore on login:"
+echo "     systemctl --user enable --now tmuxsaver-restore.service"
+echo ""

@@ -7,7 +7,7 @@ After=default.target
 Type=oneshot
 # Only restore if a tmux server is already running (e.g. started by tmux.service
 # or manually). Does nothing if no server is present.
-ExecStart=%h/.local/bin/tmuxsaver restore --quiet
+ExecStart=/usr/bin/tmuxsaver restore --quiet
 
 [Install]
 WantedBy=default.target
