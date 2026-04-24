@@ -5,10 +5,12 @@ SNIPPET=/usr/share/tmuxsaver/tmuxsaver.sh
 BEGIN_MARKER="# tmuxsaver:begin"
 END_MARKER="# tmuxsaver:end"
 
-# ── Systemd: enable save-on-logout for all users ─────────────────────────────
+# ── Systemd: enable save-on-logout and restore-on-login for all users ────────
 if command -v systemctl &>/dev/null; then
     systemctl --global enable tmuxsaver-save.service 2>/dev/null && \
         echo "tmuxsaver: enabled tmuxsaver-save.service globally (save on logout)"
+    systemctl --global enable tmuxsaver-restore.service 2>/dev/null && \
+        echo "tmuxsaver: enabled tmuxsaver-restore.service globally (restore on login)"
 fi
 
 # ── Per-user setup ────────────────────────────────────────────────────────────
@@ -58,9 +60,8 @@ echo "  - Sessions are saved automatically when you detach from tmux."
 echo ""
 echo "Reload your shell now:  source ~/.bashrc"
 echo ""
+echo "Sessions will be restored on your next login (via systemd user service)."
+echo ""
 echo "Optional — auto-attach to restored sessions on login:"
 echo "  Add TMUXSAVER_AUTO_ATTACH=1 to your ~/.bashrc or ~/.profile"
-echo ""
-echo "Optional — restore sessions on login via systemd:"
-echo "  systemctl --user enable --now tmuxsaver-restore.service"
 echo ""

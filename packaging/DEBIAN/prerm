@@ -6,6 +6,7 @@ if command -v systemctl &>/dev/null; then
     systemctl --global disable tmuxsaver-save.service    2>/dev/null || true
     systemctl --global disable tmuxsaver-restore.service 2>/dev/null || true
     systemctl --user   stop    tmuxsaver-save.service    2>/dev/null || true
+    systemctl --user   stop    tmuxsaver-restore.service 2>/dev/null || true
     systemctl --user   daemon-reload                     2>/dev/null || true
 fi
 

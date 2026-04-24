@@ -21,8 +21,8 @@ On login, your terminal automatically attaches to your restored tmux sessions.
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.3.0/tmuxsaver_0.3.0_all.deb
-sudo apt install /tmp/tmuxsaver_0.3.0_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.3/tmuxsaver_0.4.3_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.3_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -30,6 +30,7 @@ sudo apt install /tmp/tmuxsaver_0.3.0_all.deb
 
 The installer automatically:
 - enables `tmuxsaver-save.service` (save on logout) for all users
+- enables `tmuxsaver-restore.service` (restore on login) for all users
 - appends the shell integration hook to your `~/.bashrc` and `~/.zshrc`
 - adds a save-on-detach hook to your `~/.tmux.conf`
 
@@ -63,10 +64,11 @@ tmuxsaver setup-tmux    # add save-on-detach hook to ~/.tmux.conf
 - Whenever you detach from tmux (`tmux detach` or closing the terminal), a hook in `~/.tmux.conf` runs `tmuxsaver save`
 - On logout/shutdown, the systemd user service saves as a fallback
 
-**Restoring** on login requires one of:
-- `tmuxsaver restore` — manual, creates sessions in the background; then `tmux attach`
-- `systemctl --user enable --now tmuxsaver-restore.service` — restores at login via systemd
-- `TMUXSAVER_AUTO_ATTACH=1` in `~/.bashrc` or `~/.profile` — shell hook restores and attaches automatically (opt-in; only attaches if sessions actually exist)
+**Restoring** happens automatically on login via `tmuxsaver-restore.service` (enabled by default by the `.deb`). Sessions are re-created in the background; run `tmux attach` to pick them up.
+
+Alternative / supplemental:
+- `tmuxsaver restore` — run it by hand any time (e.g. after killing the server)
+- `TMUXSAVER_AUTO_ATTACH=1` in `~/.bashrc` or `~/.profile` — shell hook restores and attaches automatically on shell startup (opt-in; only attaches if sessions actually exist)
 
 ## Saved data layout
 
