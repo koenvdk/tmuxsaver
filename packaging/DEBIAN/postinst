@@ -52,6 +52,17 @@ PYEOF
 
     # tmux save-on-detach hook
     sudo -u "$SUDO_USER" tmuxsaver setup-tmux 2>/dev/null || true
+
+    # ── Remove from-source binaries that would shadow /usr/bin/tmuxsaver ─────
+    # ~/.local/bin and /usr/local/bin are typically earlier in PATH than
+    # /usr/bin, so a leftover copy from `./install.sh` keeps running after the
+    # .deb is installed. Scrub them so the .deb's version always wins.
+    for binpath in "$USER_HOME/.local/bin/tmuxsaver" "/usr/local/bin/tmuxsaver"; do
+        if [[ -f "$binpath" ]] && [[ "$(realpath "$binpath" 2>/dev/null)" != "/usr/bin/tmuxsaver" ]]; then
+            rm -f "$binpath"
+            echo "tmuxsaver: removed shadowing copy at $binpath"
+        fi
+    done
 fi
 
 echo ""

@@ -21,8 +21,8 @@ On login, your terminal automatically attaches to your restored tmux sessions.
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.4/tmuxsaver_0.4.4_all.deb
-sudo apt install /tmp/tmuxsaver_0.4.4_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.5/tmuxsaver_0.4.5_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.5_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -41,7 +41,7 @@ Open a new shell (or `source ~/.bashrc`) for the hooks to take effect.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.4.4
+VER=0.4.5
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
