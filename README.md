@@ -21,8 +21,8 @@ On login, your terminal automatically attaches to your restored tmux sessions.
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.3/tmuxsaver_0.4.3_all.deb
-sudo apt install /tmp/tmuxsaver_0.4.3_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.4/tmuxsaver_0.4.4_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.4_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -36,18 +36,30 @@ The installer automatically:
 
 Open a new shell (or `source ~/.bashrc`) for the hooks to take effect.
 
-### From source
+### Other Linux distros (release tarball)
+
+If you don't have `apt`, grab the source tarball from the same release and run the installer:
+
+```bash
+VER=0.4.4
+wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
+tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
+cd /tmp/tmuxsaver-${VER}
+./install.sh
+```
+
+`./install.sh` defaults to a full install (binary + shell hook + tmux.conf hook + systemd user services). Pass any of `--no-shell-hook`, `--no-tmux-hook`, `--no-systemd`, or `--binary-only` to opt out.
+
+Make sure `~/.local/bin` (or your chosen `--prefix/bin`) is in `$PATH`.
+
+### From a git checkout
 
 ```bash
 git clone https://github.com/koenvdk/tmuxsaver.git
 cd tmuxsaver
-./install.sh                      # binary only (~/.local/bin)
-./install.sh --shell-hook         # also add shell integration
-./install.sh --systemd            # also install systemd services
-./install.sh --shell-hook --systemd  # everything
+./install.sh                 # full install (default)
+./install.sh --binary-only   # just the binary, no hooks/services
 ```
-
-Make sure `~/.local/bin` (or your chosen `--prefix/bin`) is in `$PATH`.
 
 ### Manual install
 

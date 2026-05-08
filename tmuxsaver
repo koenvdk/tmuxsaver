@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.3"
+TMUXSAVER_VERSION="0.4.4"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -32,7 +32,9 @@ die()  { echo "[tmuxsaver] ERROR: $*" >&2; exit 1; }
 
 require_tmux() {
     command -v tmux &>/dev/null || die "tmux is not installed or not in PATH"
-    tmux info &>/dev/null 2>&1 || die "no tmux server is running"
+    # Use list-sessions (== `tmux ls`) as the probe: `tmux info` can fail in
+    # contexts without a TTY/target even when a server is running.
+    tmux list-sessions &>/dev/null || die "no tmux server is running"
 }
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ cmd_save() {
 
 cmd_restore() {
     command -v tmux &>/dev/null || { warn "tmux is not installed"; return 0; }
-    tmux info &>/dev/null 2>&1  || tmux start-server
+    tmux list-sessions &>/dev/null || tmux start-server
 
     [[ -d "$SAVE_DIR" ]] || {
         info "No saved sessions found at $SAVE_DIR"
