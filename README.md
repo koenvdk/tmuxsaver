@@ -21,8 +21,8 @@ On login, your terminal automatically attaches to your restored tmux sessions.
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.6/tmuxsaver_0.4.6_all.deb
-sudo apt install /tmp/tmuxsaver_0.4.6_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.7/tmuxsaver_0.4.7_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.7_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -41,7 +41,7 @@ Open a new shell (or `source ~/.bashrc`) for the hooks to take effect.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.4.6
+VER=0.4.7
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -69,6 +69,27 @@ cp tmuxsaver ~/.local/bin/
 tmuxsaver setup-shell   # print shell snippet → add to ~/.bashrc
 tmuxsaver setup-tmux    # add save-on-detach hook to ~/.tmux.conf
 ```
+
+### Updating, reinstalling, uninstalling
+
+Your saved sessions in `~/.tmuxsaver` are **user data** — they survive upgrades and
+reinstalls, and are only ever removed when you explicitly ask.
+
+```bash
+# Update / reinstall (keeps saved sessions, never prompts)
+sudo apt install /tmp/tmuxsaver_0.4.7_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.4.7_all.deb
+
+# Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.7_all.deb
+
+# Uninstall (this is the only path that asks about removing saved sessions)
+sudo apt remove tmuxsaver
+```
+
+> If `apt` doesn't pass the variable through to the package scripts, run the
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.7_all.deb`.
+> You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
 

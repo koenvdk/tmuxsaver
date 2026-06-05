@@ -1,6 +1,20 @@
 #!/bin/bash
 set -e
 
+# dpkg invokes this as `prerm <action> [...]`:
+#   remove                → genuine uninstall
+#   upgrade <new-version> → upgrade OR `apt install --reinstall`
+#   failed-upgrade ...    → recovery path
+# Only a genuine `remove` should tear down the integration and ask about the
+# user's saved session data. On upgrade/reinstall we must do nothing: the
+# incoming postinst reconciles services and hooks, and session data must be
+# preserved silently. To wipe data during a reinstall, use the postinst's
+# TMUXSAVER_PURGE_DATA=1 opt-in instead (see README "reinstallclean").
+ACTION="${1:-remove}"
+if [[ "$ACTION" != "remove" ]]; then
+    exit 0
+fi
+
 # ── Disable and stop services ─────────────────────────────────────────────────
 if command -v systemctl &>/dev/null; then
     systemctl --global disable tmuxsaver-save.service    2>/dev/null || true

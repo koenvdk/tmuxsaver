@@ -17,6 +17,15 @@ fi
 if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 
+    # ── Opt-in data purge ("reinstallclean") ─────────────────────────────────
+    # A normal install/reinstall/upgrade never touches saved sessions. Pass
+    # TMUXSAVER_PURGE_DATA=1 to deliberately wipe them, e.g.:
+    #   sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_*.deb
+    if [[ "${TMUXSAVER_PURGE_DATA:-0}" == "1" ]] && [[ -d "$USER_HOME/.tmuxsaver" ]]; then
+        rm -rf "$USER_HOME/.tmuxsaver"
+        echo "tmuxsaver: purged saved session data (TMUXSAVER_PURGE_DATA=1)"
+    fi
+
     for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
         [[ -f "$rcfile" ]] || continue
 
