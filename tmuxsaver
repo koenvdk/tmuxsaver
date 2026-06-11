@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.7"
+TMUXSAVER_VERSION="0.4.8"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -197,14 +197,27 @@ cmd_setup_shell() {
 cmd_setup_tmux() {
     local tmux_conf="$HOME/.tmux.conf"
     local marker="# tmuxsaver: save on detach"
+    # IMPORTANT: run-shell -b (background). A *synchronous* run-shell in the
+    # client-detached hook blocks tmux's teardown and re-enters the server
+    # (save calls tmux back), which can kill a pane's process on a graceful
+    # disconnect (window close / logout). The -b form detaches the save from
+    # the teardown path. Do not drop the -b.
+    local hookline='set-hook -ga client-detached "run-shell -b \"tmuxsaver save --quiet || true\""'
 
-    if grep -qF "$marker" "$tmux_conf" 2>/dev/null; then
-        info "tmux hook already present in $tmux_conf"
-        return 0
+    # Migrate in place: strip any existing tmuxsaver hook (including the old
+    # synchronous form) before re-adding, so upgrades pick up the -b version.
+    if [[ -f "$tmux_conf" ]] && grep -qF "$marker" "$tmux_conf"; then
+        sed -i "\|$marker|,+1d" "$tmux_conf"
+        info "Updating existing tmux hook in $tmux_conf"
     fi
 
-    printf '\n%s\nset-hook -ga client-detached "run-shell \\"tmuxsaver save --quiet || true\\""\n' \
-        "$marker" >> "$tmux_conf"
+    # Trim trailing blank lines so repeated runs don't accumulate them, then
+    # re-append with exactly one separating blank line.
+    while [[ -s "$tmux_conf" ]] && [[ -z "$(tail -n1 "$tmux_conf")" ]]; do
+        sed -i '$d' "$tmux_conf"
+    done
+
+    printf '\n%s\n%s\n' "$marker" "$hookline" >> "$tmux_conf"
     info "Added save-on-detach hook to $tmux_conf"
     info "Reload now with: tmux source-file $tmux_conf"
 }
