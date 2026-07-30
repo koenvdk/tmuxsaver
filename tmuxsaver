@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.8"
+TMUXSAVER_VERSION="0.4.9"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -52,6 +52,7 @@ cmd_save() {
 
     mkdir -p "$SAVE_DIR"
     local count=0
+    local missing_history=()
 
     while IFS= read -r session; do
         [[ -z "$session" ]] && continue
@@ -68,13 +69,27 @@ cmd_save() {
         if [[ -f "$histfile" ]]; then
             info "Saved session '$session': $workdir (history present)"
         else
-            info "Saved session '$session': $workdir (no per-session history — run 'tmuxsaver setup-shell' to enable)"
+            info "Saved session '$session': $workdir (no per-session history yet)"
+            missing_history+=("$session")
         fi
 
         count=$(( count + 1 ))
     done <<< "$sessions"
 
     info "Saved $count session(s) to $SAVE_DIR"
+
+    # A missing history file means the session's shell isn't writing to the
+    # per-session path yet. New shells pick this up automatically once the
+    # tmuxsaver hook is in ~/.bashrc; existing shells need a one-time flush.
+    # NOTE: `tmuxsaver setup-shell` only PRINTS the hook snippet — it can't
+    # create history for a live shell, so we do not point users there.
+    if [[ ${#missing_history[@]} -gt 0 ]] && [[ $QUIET -eq 0 ]]; then
+        warn "No per-session history file for: ${missing_history[*]}"
+        warn "New panes record history automatically once the hook is in ~/.bashrc."
+        warn "To capture an existing session's current history, run INSIDE its pane:"
+        warn "    export HISTFILE=\"\$HOME/.tmuxsaver/sessions/\$(tmux display-message -p '#S')/history\""
+        warn "    mkdir -p \"\$(dirname \"\$HISTFILE\")\" && history -w"
+    fi
 }
 
 # ---------------------------------------------------------------------------

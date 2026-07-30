@@ -21,8 +21,8 @@ On login, your terminal automatically attaches to your restored tmux sessions.
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.8/tmuxsaver_0.4.8_all.deb
-sudo apt install /tmp/tmuxsaver_0.4.8_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.9/tmuxsaver_0.4.9_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.9_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -41,7 +41,7 @@ Open a new shell (or `source ~/.bashrc`) for the hooks to take effect.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.4.8
+VER=0.4.9
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -77,18 +77,18 @@ reinstalls, and are only ever removed when you explicitly ask.
 
 ```bash
 # Update / reinstall (keeps saved sessions, never prompts)
-sudo apt install /tmp/tmuxsaver_0.4.8_all.deb
-sudo apt install --reinstall /tmp/tmuxsaver_0.4.8_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.9_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.4.9_all.deb
 
 # Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
-sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.8_all.deb
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.9_all.deb
 
 # Uninstall (this is the only path that asks about removing saved sessions)
 sudo apt remove tmuxsaver
 ```
 
 > If `apt` doesn't pass the variable through to the package scripts, run the
-> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.8_all.deb`.
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.9_all.deb`.
 > You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
@@ -102,6 +102,26 @@ sudo apt remove tmuxsaver
 Alternative / supplemental:
 - `tmuxsaver restore` — run it by hand any time (e.g. after killing the server)
 - `TMUXSAVER_AUTO_ATTACH=1` in `~/.bashrc` or `~/.profile` — shell hook restores and attaches automatically on shell startup (opt-in; only attaches if sessions actually exist)
+
+### Per-session history
+
+The shell hook (in `~/.bashrc`/`~/.zshrc`) points each tmux session at its own
+history file and flushes after every command, so history is always on disk —
+not just when the shell exits.
+
+This only applies to shells started **after** the hook was installed. A pane
+that was already running (or one running a foreground program like an editor)
+keeps writing to the default `~/.bash_history`, so `tmuxsaver save` will report
+`no per-session history yet` for it. New panes are fine automatically. To
+capture an existing session's current history once, run **inside that pane**:
+
+```bash
+export HISTFILE="$HOME/.tmuxsaver/sessions/$(tmux display-message -p '#S')/history"
+mkdir -p "$(dirname "$HISTFILE")" && history -w
+```
+
+> `tmuxsaver setup-shell` only *prints* the hook snippet (for manual installs);
+> it does not create history for a running shell.
 
 ## Saved data layout
 
