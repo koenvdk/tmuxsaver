@@ -104,5 +104,5 @@ if [[ $DO_SHELL -eq 1 ]]; then
     echo "Open a new shell (or 'source ~/.bashrc') for the per-session history hook to take effect."
     echo ""
 fi
-echo "Optional — auto-attach to restored sessions on login:"
-echo "  Add TMUXSAVER_AUTO_ATTACH=1 to your ~/.bashrc or ~/.profile"
+echo "Sessions restore on login via the systemd service (without attaching);"
+echo "run 'tmux attach' when you want to enter them."

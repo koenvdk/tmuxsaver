@@ -4,12 +4,13 @@
 # No windows, panes, or running programs are preserved.
 #
 # Usage: tmuxsaver <command> [options]
-#   save          Save all current tmux sessions
-#   restore       Restore previously saved sessions
-#   list          List saved sessions
-#   clean         Remove all saved session data
-#   setup-shell   Print the shell integration snippet
-#   setup-tmux    Add save-on-detach hook to ~/.tmux.conf
+#   save              Save all current tmux sessions
+#   restore           Restore previously saved sessions
+#   list              List saved sessions
+#   forget <name>...  Remove saved data for one or more sessions
+#   clean             Remove all saved session data
+#   setup-shell       Print the shell integration snippet
+#   setup-tmux        Add save-on-detach hook to ~/.tmux.conf
 #
 # Options:
 #   --dir <path>  Override save directory (default: ~/.tmuxsaver)
@@ -17,7 +18,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.9"
+TMUXSAVER_VERSION="0.4.10"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -197,6 +198,38 @@ cmd_clean() {
 }
 
 # ---------------------------------------------------------------------------
+# Forget — remove saved data for specific sessions (not all of them)
+# ---------------------------------------------------------------------------
+
+cmd_forget() {
+    [[ ${#FORGET_TARGETS[@]} -gt 0 ]] || \
+        die "forget requires at least one session name (see 'tmuxsaver list')"
+
+    [[ -d "$SAVE_DIR" ]] || { info "No saved sessions to forget."; return 0; }
+
+    local removed=0
+    for name in "${FORGET_TARGETS[@]}"; do
+        # Only a plain session name is valid — reject anything that could
+        # escape SAVE_DIR (path separators or dot components).
+        if [[ "$name" == */* ]] || [[ "$name" == "." ]] || [[ "$name" == ".." ]] || [[ -z "$name" ]]; then
+            warn "Invalid session name: '$name'"
+            continue
+        fi
+
+        local dir="$SAVE_DIR/$name"
+        if [[ -d "$dir" ]]; then
+            rm -rf "$dir"
+            info "Forgot saved session '$name'"
+            removed=$(( removed + 1 ))
+        else
+            warn "No saved session named '$name' (see 'tmuxsaver list')"
+        fi
+    done
+
+    info "Removed $removed saved session(s)"
+}
+
+# ---------------------------------------------------------------------------
 # Setup-shell
 # ---------------------------------------------------------------------------
 
@@ -242,10 +275,11 @@ cmd_setup_tmux() {
 # ---------------------------------------------------------------------------
 
 COMMAND=""
+FORGET_TARGETS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        save|restore|list|clean|setup-shell|setup-tmux)
+        save|restore|list|clean|forget|setup-shell|setup-tmux)
             COMMAND="$1"
             shift
             ;;
@@ -263,21 +297,32 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         --help|-h)
-            sed -n '2,12p' "$0"
+            sed -n '2,13p' "$0"
             exit 0
             ;;
+        -*)
+            die "Unknown option: $1 (try --help)"
+            ;;
         *)
-            die "Unknown argument: $1 (try --help)"
+            # Positional args are session names for `forget`; anything else is
+            # an error.
+            if [[ "$COMMAND" == "forget" ]]; then
+                FORGET_TARGETS+=("$1")
+                shift
+            else
+                die "Unknown argument: $1 (try --help)"
+            fi
             ;;
     esac
 done
 
-[[ -n "$COMMAND" ]] || { sed -n '2,12p' "$0"; exit 1; }
+[[ -n "$COMMAND" ]] || { sed -n '2,13p' "$0"; exit 1; }
 
 case "$COMMAND" in
     save)         cmd_save ;;
     restore)      cmd_restore ;;
     list)         cmd_list ;;
+    forget)       cmd_forget ;;
     clean)        cmd_clean ;;
     setup-shell)  cmd_setup_shell ;;
     setup-tmux)   cmd_setup_tmux ;;
