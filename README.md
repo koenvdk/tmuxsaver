@@ -21,8 +21,8 @@ On login, your saved tmux sessions are restored in the background — run `tmux 
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.10/tmuxsaver_0.4.10_all.deb
-sudo apt install /tmp/tmuxsaver_0.4.10_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.11/tmuxsaver_0.4.11_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.11_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -41,7 +41,7 @@ Open a new shell (or `source ~/.bashrc`) for the hooks to take effect.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.4.10
+VER=0.4.11
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -77,18 +77,18 @@ reinstalls, and are only ever removed when you explicitly ask.
 
 ```bash
 # Update / reinstall (keeps saved sessions, never prompts)
-sudo apt install /tmp/tmuxsaver_0.4.10_all.deb
-sudo apt install --reinstall /tmp/tmuxsaver_0.4.10_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.11_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.4.11_all.deb
 
 # Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
-sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.10_all.deb
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.11_all.deb
 
 # Uninstall (this is the only path that asks about removing saved sessions)
 sudo apt remove tmuxsaver
 ```
 
 > If `apt` doesn't pass the variable through to the package scripts, run the
-> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.10_all.deb`.
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.11_all.deb`.
 > You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
@@ -103,6 +103,43 @@ sudo apt remove tmuxsaver
 
 Alternative / supplemental:
 - `tmuxsaver restore` — run it by hand any time (e.g. after killing the server)
+
+### Surviving a full logout (systemd lingering)
+
+There are two different things you might mean by "keeping a session":
+
+- **Saved data** (working directory + history) — always preserved. It's written
+  on detach/logout and re-created on your next login, no matter what.
+- **The *live* session** (the running tmux server and whatever is executing in
+  its panes) — this only survives a full logout if **lingering** is enabled.
+
+Why: the restore service runs the tmux server under your *systemd user manager*
+(`user@UID.service`), not inside any one login session. On a modern system with
+`KillUserProcesses=yes` (the default), logind stops that user manager the moment
+your **last** login session ends — taking the tmux server with it — unless
+lingering is on. Lingering (`loginctl enable-linger`) tells logind to keep your
+user manager (and its daemons) running with zero active sessions. It is the
+supported, per-user way to make a user daemon outlive logout.
+
+The installer **enables lingering by default**:
+
+- `.deb`: `postinst` runs `loginctl enable-linger` for the installing user.
+  apt/dpkg run non-interactively, so it can't prompt — opt out with
+  `sudo TMUXSAVER_NO_LINGER=1 apt install /tmp/tmuxsaver_0.4.11_all.deb`.
+- `install.sh`: prompts (default yes) when run in a terminal; skip it with
+  `--no-linger` or `TMUXSAVER_NO_LINGER=1`.
+
+Toggle it yourself any time:
+
+```bash
+loginctl enable-linger "$USER"    # live sessions survive full logout
+loginctl disable-linger "$USER"   # revert to logout tearing the server down
+loginctl show-user "$USER" | grep Linger
+```
+
+> Even with lingering off, you never lose your saved directories/history — only
+> the running processes. With it on, closing your last SSH terminal leaves the
+> tmux server (and its panes) running for `tmux attach` next time.
 
 ### Per-session history
 

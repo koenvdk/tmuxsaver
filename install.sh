@@ -12,8 +12,13 @@
 #   --no-shell-hook   Skip ~/.bashrc / ~/.zshrc integration
 #   --no-tmux-hook    Skip ~/.tmux.conf save-on-detach hook
 #   --no-systemd      Skip systemd user services
+#   --no-linger       Don't enable systemd lingering (sessions won't survive full logout)
 #   --binary-only     Only install the binary; equivalent to --no-shell-hook --no-tmux-hook --no-systemd
 #   --prefix <dir>    Install binary to <dir>/bin (default: ~/.local)
+#
+# Lingering (enabled by default with --systemd) keeps your user systemd manager
+# — and the tmux server it runs — alive after your last logout. Opt out with
+# --no-linger or TMUXSAVER_NO_LINGER=1.
 
 set -euo pipefail
 
@@ -21,13 +26,15 @@ PREFIX="$HOME/.local"
 DO_SYSTEMD=1
 DO_SHELL=1
 DO_TMUX=1
+DO_LINGER=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-systemd)     DO_SYSTEMD=0; shift ;;
         --no-shell-hook)  DO_SHELL=0;   shift ;;
         --no-tmux-hook)   DO_TMUX=0;    shift ;;
-        --binary-only)    DO_SYSTEMD=0; DO_SHELL=0; DO_TMUX=0; shift ;;
+        --no-linger)      DO_LINGER=0;  shift ;;
+        --binary-only)    DO_SYSTEMD=0; DO_SHELL=0; DO_TMUX=0; DO_LINGER=0; shift ;;
         --prefix)
             [[ -n "${2:-}" ]] || { echo "ERROR: --prefix requires a path"; exit 1; }
             PREFIX="$2"; shift 2
@@ -39,6 +46,9 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1 (try --help)"; exit 1 ;;
     esac
 done
+
+# Environment opt-out (mirrors the .deb's TMUXSAVER_NO_LINGER=1).
+[[ "${TMUXSAVER_NO_LINGER:-0}" == "1" ]] && DO_LINGER=0
 
 BIN_DIR="$PREFIX/bin"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -89,6 +99,29 @@ if [[ $DO_SYSTEMD -eq 1 ]]; then
         systemctl --user enable --now tmuxsaver-restore.service
         echo "Enabled tmuxsaver-save.service (save on logout)"
         echo "Enabled tmuxsaver-restore.service (restore on login)"
+
+        # ── Lingering: keep the tmux server alive past your last logout ──────
+        # The restore service runs the tmux server under your systemd user
+        # manager; without linger, logind stops that manager (and the server)
+        # when your last session ends. Enabling linger persists it. Prompt when
+        # we have a TTY (default yes); honor --no-linger / TMUXSAVER_NO_LINGER=1.
+        if [[ $DO_LINGER -eq 1 ]] && command -v loginctl &>/dev/null; then
+            ans=y
+            if [[ -t 0 ]]; then
+                read -r -p "Enable lingering so tmux sessions survive a full logout? [Y/n] " ans || ans=y
+                ans=${ans:-y}
+            fi
+            if [[ "$ans" =~ ^[Yy]$ ]]; then
+                if loginctl enable-linger "$USER" 2>/dev/null; then
+                    echo "Enabled lingering for $USER (undo: loginctl disable-linger $USER)"
+                else
+                    echo "WARNING: could not enable lingering; run: sudo loginctl enable-linger $USER"
+                fi
+            else
+                echo "Skipped lingering — live sessions won't survive your LAST logout until you run:"
+                echo "  loginctl enable-linger $USER"
+            fi
+        fi
     fi
 fi
 

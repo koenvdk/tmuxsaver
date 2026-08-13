@@ -72,6 +72,25 @@ PYEOF
             echo "tmuxsaver: removed shadowing copy at $binpath"
         fi
     done
+
+    # ── Keep the tmux server alive across a FULL logout/disconnect ───────────
+    # The restore service runs the tmux server under the user's systemd manager
+    # (user@UID.service). With linger OFF, logind stops that manager when the
+    # user's LAST login session ends — killing the tmux server and every live
+    # pane process. Enabling linger keeps the manager (and the server) running
+    # with zero sessions: the systemd-sanctioned way to persist a user daemon
+    # past logout. Saved data is restored regardless; linger is what preserves
+    # the *running* sessions. Default on; opt out with TMUXSAVER_NO_LINGER=1.
+    # NOTE: apt/dpkg run postinst non-interactively, so we can't reliably prompt
+    # here (that would need debconf) — hence default-on + an env opt-out.
+    if [[ "${TMUXSAVER_NO_LINGER:-0}" != "1" ]] && command -v loginctl &>/dev/null; then
+        if loginctl enable-linger "$SUDO_USER" 2>/dev/null; then
+            echo "tmuxsaver: enabled lingering for $SUDO_USER — live sessions now survive a full logout"
+            echo "tmuxsaver:   undo with 'loginctl disable-linger $SUDO_USER'; skip next time with TMUXSAVER_NO_LINGER=1"
+        else
+            echo "tmuxsaver: could not enable lingering (run: sudo loginctl enable-linger $SUDO_USER)"
+        fi
+    fi
 fi
 
 echo ""
