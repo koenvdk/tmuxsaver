@@ -59,6 +59,10 @@ mkdir -p "$BIN_DIR"
 install -m 755 "$SCRIPT_DIR/tmuxsaver" "$BIN_DIR/tmuxsaver"
 echo "Installed: $BIN_DIR/tmuxsaver"
 
+# Shell snippet, where `tmuxsaver setup-shell` looks for it (<prefix>/share).
+install -Dm 644 "$SCRIPT_DIR/shell/tmuxsaver.sh" "$PREFIX/share/tmuxsaver/tmuxsaver.sh"
+echo "Installed: $PREFIX/share/tmuxsaver/tmuxsaver.sh"
+
 # ── Shell hook (per-session HISTFILE) ───────────────────────────────────────
 if [[ $DO_SHELL -eq 1 ]]; then
     SNIPPET_FILE="$SCRIPT_DIR/shell/tmuxsaver.sh"
@@ -91,7 +95,11 @@ if [[ $DO_SYSTEMD -eq 1 ]]; then
     else
         mkdir -p "$SYSTEMD_DIR"
         for unit in tmuxsaver-save.service tmuxsaver-restore.service; do
-            install -m 644 "$SCRIPT_DIR/systemd/$unit" "$SYSTEMD_DIR/$unit"
+            # The units reference /usr/bin/tmuxsaver (the .deb location);
+            # point them at the binary we just installed instead.
+            sed "s|/usr/bin/tmuxsaver|$BIN_DIR/tmuxsaver|g" \
+                "$SCRIPT_DIR/systemd/$unit" > "$SYSTEMD_DIR/$unit"
+            chmod 644 "$SYSTEMD_DIR/$unit"
             echo "Installed: $SYSTEMD_DIR/$unit"
         done
         systemctl --user daemon-reload
