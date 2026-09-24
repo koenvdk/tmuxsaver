@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.11"
+TMUXSAVER_VERSION="0.4.12"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -61,9 +61,11 @@ cmd_save() {
         local session_dir="$SAVE_DIR/$session"
         mkdir -p "$session_dir"
 
-        # Working directory: use the most recently active pane
+        # Working directory: use the most recently active pane.
+        # "=name:" forces an exact session match — a bare name would also
+        # match any session it is a prefix of (e.g. "work" → "workbench").
         local workdir
-        workdir=$(tmux display-message -t "$session" -p '#{pane_current_path}' 2>/dev/null) || continue
+        workdir=$(tmux display-message -t "=$session:" -p '#{pane_current_path}' 2>/dev/null) || continue
         echo "$workdir" > "$session_dir/workdir"
 
         local histfile="$session_dir/history"
@@ -126,7 +128,9 @@ cmd_restore() {
             warn "No saved workdir for session '$session'; restoring at \$HOME"
         fi
 
-        if tmux has-session -t "$session" 2>/dev/null; then
+        # "=name" forces an exact match; a bare name prefix-matches, so a
+        # live "workbench" would make us skip restoring a saved "work".
+        if tmux has-session -t "=$session" 2>/dev/null; then
             info "Session '$session' already exists — skipping"
             continue
         fi
@@ -146,7 +150,7 @@ cmd_restore() {
         # makes the first Up-arrow show a blank line, forcing the user to press
         # Up twice to reach their last command.
         if [[ -f "$histfile" ]]; then
-            tmux send-keys -t "$session" \
+            tmux send-keys -t "=$session:" \
                 " export HISTFILE='$histfile'; history -c; history -r" \
                 Enter
         fi

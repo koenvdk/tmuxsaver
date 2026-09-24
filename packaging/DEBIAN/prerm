@@ -67,7 +67,14 @@ PYEOF
     if [[ -d "$SESSION_DIR" ]]; then
         echo ""
         echo "tmuxsaver: saved session data found at $SESSION_DIR"
-        read -r -p "Remove saved session data? [y/N] " answer
+        # Only prompt on a real terminal. Without one (unattended apt,
+        # DEBIAN_FRONTEND=noninteractive), `read` hits EOF and returns 1, which
+        # under `set -e` aborts prerm and makes the package unremovable.
+        # Default to keeping the data.
+        answer=n
+        if [[ -t 0 ]]; then
+            read -r -p "Remove saved session data? [y/N] " answer || answer=n
+        fi
         if [[ "$answer" =~ ^[Yy]$ ]]; then
             rm -rf "$SESSION_DIR"
             echo "tmuxsaver: session data removed"

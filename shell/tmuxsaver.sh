@@ -1,7 +1,9 @@
 # tmuxsaver:begin — shell integration (managed by tmuxsaver, do not edit this block)
 if [[ -n "${TMUX:-}" ]]; then
-    # Inside tmux: give each session its own history file
-    _ts_session=$(tmux display-message -p '#S' 2>/dev/null)
+    # Inside tmux: give each session its own history file.
+    # Target our own pane explicitly: without -t, tmux resolves the "current
+    # client", which can be a different session when several are attached.
+    _ts_session=$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null)
     if [[ -n "$_ts_session" ]]; then
         export HISTFILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions/$_ts_session/history"
         mkdir -p "$(dirname "$HISTFILE")"
