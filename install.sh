@@ -54,6 +54,38 @@ BIN_DIR="$PREFIX/bin"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 
+# Print rc file $1 with every tmuxsaver shell block removed — the current
+# "# tmuxsaver:begin" … "# tmuxsaver:end" form and the old unterminated form
+# that ran to its closing `fi` — and with trailing blank lines dropped.
+# A block whose closing line is missing is kept as-is rather than taking the
+# rest of the file with it.
+strip_shell_hook() {
+    awk '
+        skip != "" {
+            block = block $0 "\n"
+            if ((skip == "end" && /^# tmuxsaver:end/) || (skip == "fi" && /^fi$/)) {
+                skip = ""; block = ""
+            }
+            next
+        }
+        /^# tmuxsaver:begin/             { skip = "end"; block = $0 "\n"; next }
+        /^# tmuxsaver shell integration/ { skip = "fi";  block = $0 "\n"; next }
+        /^$/ { blank = blank "\n"; next }
+        { printf "%s", blank; blank = ""; print }
+        END { if (skip != "") printf "%s%s", blank, block }
+    ' "$1"
+}
+
+# Replace file $1's contents with stdin. Writing through the existing file
+# (rather than swapping in a new one, as `sed -i` does) keeps its owner, mode
+# and any symlink — e.g. a dotfile manager's ~/.bashrc — intact.
+overwrite() {
+    local tmp
+    tmp=$(mktemp)
+    cat > "$tmp" && cat "$tmp" > "$1"
+    rm -f "$tmp"
+}
+
 # ── Binary ──────────────────────────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 install -m 755 "$SCRIPT_DIR/tmuxsaver" "$BIN_DIR/tmuxsaver"
@@ -70,15 +102,7 @@ if [[ $DO_SHELL -eq 1 ]]; then
         [[ -f "$rcfile" ]] || continue
         # Idempotent: strip any existing tmuxsaver block (old or new style),
         # then re-append the current snippet.
-        python3 - "$rcfile" "$SNIPPET_FILE" <<'PYEOF'
-import re, sys, pathlib
-rcfile  = pathlib.Path(sys.argv[1])
-snippet = pathlib.Path(sys.argv[2]).read_text()
-content = rcfile.read_text()
-content = re.sub(r'\n# tmuxsaver:begin.*?# tmuxsaver:end\n', '\n', content, flags=re.DOTALL)
-content = re.sub(r'\n# tmuxsaver shell integration.*?^fi\n', '\n', content, flags=re.DOTALL | re.MULTILINE)
-rcfile.write_text(content.rstrip('\n') + '\n\n' + snippet)
-PYEOF
+        { strip_shell_hook "$rcfile"; echo; cat "$SNIPPET_FILE"; } | overwrite "$rcfile"
         echo "Shell hook updated in $rcfile"
     done
 fi
