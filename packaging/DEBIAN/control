@@ -1,8 +1,8 @@
 Package: tmuxsaver
-Version: 0.4.14
+Version: 0.4.15
 Architecture: all
 Maintainer: Koen Van der Kimpen <koen.vanderkimpen@smals.be>
-Depends: tmux, bash (>= 4.0)
+Depends: tmux (>= 3.0), bash (>= 4.0)
 Recommends: systemd
 Section: utils
 Priority: optional
