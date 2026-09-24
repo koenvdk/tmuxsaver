@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.12"
+TMUXSAVER_VERSION="0.4.13"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -238,8 +238,20 @@ cmd_forget() {
 # ---------------------------------------------------------------------------
 
 cmd_setup_shell() {
-    cat /usr/share/tmuxsaver/tmuxsaver.sh 2>/dev/null || \
-        cat "$(dirname "$(realpath "$0")")/shell/tmuxsaver.sh"
+    # Look next to the binary first (<prefix>/bin → <prefix>/share, as laid
+    # out by install.sh, `make install` and the .deb), then the git checkout.
+    local bin_dir candidate
+    bin_dir="$(dirname "$(realpath "$0")")"
+    for candidate in \
+        "$bin_dir/../share/tmuxsaver/tmuxsaver.sh" \
+        "/usr/share/tmuxsaver/tmuxsaver.sh" \
+        "$bin_dir/shell/tmuxsaver.sh"; do
+        if [[ -f "$candidate" ]]; then
+            cat "$candidate"
+            return 0
+        fi
+    done
+    die "shell integration snippet not found (looked under $bin_dir/../share/tmuxsaver)"
 }
 
 # ---------------------------------------------------------------------------
@@ -254,7 +266,12 @@ cmd_setup_tmux() {
     # (save calls tmux back), which can kill a pane's process on a graceful
     # disconnect (window close / logout). The -b form detaches the save from
     # the teardown path. Do not drop the -b.
-    local hookline='set-hook -ga client-detached "run-shell -b \"tmuxsaver save --quiet || true\""'
+    # Use this binary's absolute path: the hook runs with the tmux server's
+    # PATH, which (e.g. for a server started by systemd) often lacks
+    # ~/.local/bin, so a bare `tmuxsaver` would silently never run.
+    local self
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    local hookline="set-hook -ga client-detached \"run-shell -b \\\"'$self' save --quiet || true\\\"\""
 
     # Migrate in place: strip any existing tmuxsaver hook (including the old
     # synchronous form) before re-adding, so upgrades pick up the -b version.

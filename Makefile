@@ -12,10 +12,13 @@ DESTDIR ?=
 install:
 	install -Dm 755 tmuxsaver               $(DESTDIR)$(PREFIX)/bin/tmuxsaver
 	install -Dm 644 shell/tmuxsaver.sh      $(DESTDIR)$(PREFIX)/share/tmuxsaver/tmuxsaver.sh
-	install -Dm 644 systemd/tmuxsaver-save.service \
-	                                        $(DESTDIR)$(PREFIX)/lib/systemd/user/tmuxsaver-save.service
-	install -Dm 644 systemd/tmuxsaver-restore.service \
-	                                        $(DESTDIR)$(PREFIX)/lib/systemd/user/tmuxsaver-restore.service
+	# Units reference /usr/bin/tmuxsaver; rewrite to the installed binary.
+	for unit in tmuxsaver-save.service tmuxsaver-restore.service; do \
+	    mkdir -p $(DESTDIR)$(PREFIX)/lib/systemd/user && \
+	    sed 's|/usr/bin/tmuxsaver|$(PREFIX)/bin/tmuxsaver|g' systemd/$$unit \
+	        > $(DESTDIR)$(PREFIX)/lib/systemd/user/$$unit && \
+	    chmod 644 $(DESTDIR)$(PREFIX)/lib/systemd/user/$$unit || exit 1; \
+	done
 
 .PHONY: uninstall
 uninstall:
