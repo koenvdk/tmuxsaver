@@ -210,6 +210,19 @@ systemctl --user enable --now tmuxsaver-restore.service
 systemctl --user disable tmuxsaver-restore.service
 ```
 
+## Development
+
+```bash
+make check   # bash -n on every script
+make lint    # shellcheck
+make test    # end-to-end: builds the .deb, installs it for a throwaway user,
+             # drives real tmux sessions in bash and zsh, uninstalls it
+```
+
+`make test` needs root, `tmux` (3.0+), `zsh` and `dpkg-deb`, and it creates
+and deletes a system user. Run it in a container or VM, not on your
+workstation. CI runs all three on every pull request.
+
 ## Releasing
 
 Releases are automatic. Bump the version in a PR and merge it:

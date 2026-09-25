@@ -26,7 +26,7 @@ QUIET=0
 # Helpers
 # ---------------------------------------------------------------------------
 
-log()  { [[ $QUIET -eq 0 ]] && echo "$*" >&2 || true; }
+log()  { if [[ $QUIET -eq 0 ]]; then echo "$*" >&2; fi; }
 info() { log "[tmuxsaver] $*"; }
 warn() { echo "[tmuxsaver] WARNING: $*" >&2; }
 die()  { echo "[tmuxsaver] ERROR: $*" >&2; exit 1; }

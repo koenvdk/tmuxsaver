@@ -2,8 +2,6 @@
 set -e
 
 SNIPPET=/usr/share/tmuxsaver/tmuxsaver.sh
-BEGIN_MARKER="# tmuxsaver:begin"
-END_MARKER="# tmuxsaver:end"
 
 # Print rc file $1 with every tmuxsaver shell block removed — the current
 # "# tmuxsaver:begin" … "# tmuxsaver:end" form and the old unterminated form
