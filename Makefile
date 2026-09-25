@@ -71,4 +71,20 @@ bump:
 check:
 	bash -n tmuxsaver
 	bash -n install.sh
+	bash -n packaging/DEBIAN/postinst
+	bash -n packaging/DEBIAN/prerm
+	bash -n tests/integration.sh
 	@echo "Syntax OK"
+
+# ── Lint / tests (also run by CI on every PR) ───────────────────────────────
+
+.PHONY: lint
+lint:
+	shellcheck tmuxsaver install.sh packaging/DEBIAN/postinst packaging/DEBIAN/prerm tests/integration.sh
+	shellcheck -s bash shell/tmuxsaver.sh
+	@echo "shellcheck OK"
+
+# Creates and deletes a throwaway user: run it in CI, a container or a VM.
+.PHONY: test
+test:
+	sudo tests/integration.sh
