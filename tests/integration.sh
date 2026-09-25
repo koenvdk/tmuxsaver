@@ -109,7 +109,7 @@ user_setup() {
     check "tmux hook uses /usr/bin/tmuxsaver" grep -qF "'/usr/bin/tmuxsaver' save" ~/.tmux.conf
     tmuxsaver setup --no-linger -q >/dev/null 2>&1
     check "second setup keeps one shell block" test "$(grep -c '^# tmuxsaver:begin' ~/.bashrc)" = 1
-    check "second setup keeps one tmux hook"   test "$(grep -c 'set-hook.*tmuxsaver' ~/.tmux.conf)" = 1
+    check "second setup keeps one tmux hook block"   test "$(grep -c '^# tmuxsaver:' ~/.tmux.conf) $(grep -c 'set-hook.*tmuxsaver' ~/.tmux.conf)" = "1 2"
 }
 
 # $1/$2: pristine copies of .bashrc/.zshrc from before setup.
@@ -256,6 +256,73 @@ user_custom_dir() {
     rm -rf "$dir"
 }
 
+# Forget-on-close: sessions you close yourself are not restored; logout,
+# shutdown and kill-server never mark anything.
+user_closed_sessions() {
+    section "forget on close (as $USER)"
+    tmux kill-server 2>/dev/null; rm -rf ~/.tmuxsaver
+    check "setup installs the session-closed hook" grep -q 'set-hook.*session-closed.*tmuxsaver' ~/.tmux.conf
+    # The server must load ~/.tmux.conf (it does: first new-session starts it).
+    tmux new-session -d -s keepme -x 160 -c /tmp
+    tmux new-session -d -s gone -x 160 -c /tmp
+    tmux new-session -d -s "it's odd" -x 160 -c /tmp
+    tmux new-session -d -s list -x 160 -c /tmp     # a name that is also a command
+    wait_pane gone '\$ *$'
+    tmuxsaver save -q
+    tmux send-keys -t =gone: 'exit' Enter
+    tmux kill-session -t "=it's odd"
+    tmux kill-session -t =list
+    local tries=50
+    until [[ -f ~/.tmuxsaver/sessions/list/closed ]] || (( tries-- <= 0 )); do sleep 0.1; done
+    sleep 0.3
+    check "typing exit marks the session closed" test -f ~/.tmuxsaver/sessions/gone/closed
+    check "kill-session marks the session closed (name with a quote)" test -f ~/.tmuxsaver/sessions/"it's odd"/closed
+    check "a session named 'list' is handled as a name" test -f ~/.tmuxsaver/sessions/list/closed
+    check "the remaining session is not marked" test ! -e ~/.tmuxsaver/sessions/keepme/closed
+    check "list shows closed sessions" bash -c 'tmuxsaver list | grep -q "gone .*closed"'
+
+    tmux kill-server
+    sleep 0.5
+    check "kill-server does not mark the last sessions closed" test ! -e ~/.tmuxsaver/sessions/keepme/closed
+    # kill-server fires session-closed only for some sessions, so also call
+    # the handler exactly as tmux does then (0 sessions left): no mark.
+    tmuxsaver closed --quiet -- keepme 0
+    check "a close that leaves 0 sessions (kill-server) is ignored" test ! -e ~/.tmuxsaver/sessions/keepme/closed
+    tmuxsaver restore -q
+    check "restore skips closed sessions" test "$(tmux ls -F '#S' | tr '\n' ' ')" = "keepme "
+    tmuxsaver reopen gone -q
+    check "reopen restores a closed session" tmux has-session -t =gone
+    check "reopen clears its closed mark" test ! -e ~/.tmuxsaver/sessions/gone/closed
+    tmuxsaver forget --closed -q
+    check "forget --closed removes only closed sessions" \
+        bash -c '[[ ! -e ~/.tmuxsaver/sessions/list && -d ~/.tmuxsaver/sessions/gone && -d ~/.tmuxsaver/sessions/keepme ]]'
+
+    wait_pane keepme '\$ *$'
+    tmux send-keys -t =keepme: 'tmuxsaver status' Enter
+    check "status (inside a pane) reports the shell is recording" wait_pane keepme 'this shell: +ok recording' 30
+    check "status reports both tmux hooks" wait_pane keepme 'tmux hooks: +ok save on detach, forget on close' 10
+    tmux kill-server
+
+    tmuxsaver setup --keep-closed --no-linger -q >/dev/null 2>&1
+    check "setup --keep-closed drops the session-closed hook" \
+        bash -c '! grep -q session-closed ~/.tmux.conf && grep -q client-detached ~/.tmux.conf'
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "plain setup puts it back (one block)" \
+        test "$(grep -c 'set-hook.*tmuxsaver' ~/.tmux.conf)" = 2
+}
+
+# Upgrade path: a ~/.tmux.conf with the pre-0.6 single hook line.
+user_old_tmux_hook() {
+    section "migrate a pre-0.6 tmux hook (as $USER)"
+    printf 'set -g mouse on\n\n# tmuxsaver: save on detach\nset-hook -ga client-detached "run-shell -b \\"tmuxsaver save --quiet || true\\""\n' > ~/.tmux.conf
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "old hook replaced by one current block" \
+        bash -c '[[ $(grep -c "^# tmuxsaver:" ~/.tmux.conf) == 1 && $(grep -c "set-hook.*tmuxsaver" ~/.tmux.conf) == 2 ]]'
+    check "user settings kept" grep -qx 'set -g mouse on' ~/.tmux.conf
+    rm -f ~/.tmux.conf
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+}
+
 user_bash() {
     section "bash: live history, detach hook, restore (as $USER)"
     tmux kill-server 2>/dev/null; rm -rf ~/.tmuxsaver
@@ -351,8 +418,8 @@ user_from_source() {
     (cd "$src" && ./install.sh --no-systemd --no-linger </dev/null >/dev/null 2>&1)
     check "re-running install.sh keeps one shell block" \
         test "$(grep -c '^# tmuxsaver:begin' ~/.bashrc)" = 1
-    check "re-running install.sh keeps one tmux hook" \
-        test "$(grep -c 'set-hook.*tmuxsaver' ~/.tmux.conf)" = 1
+    check "re-running install.sh keeps one tmux hook block" \
+        test "$(grep -c '^# tmuxsaver:' ~/.tmux.conf) $(grep -c 'set-hook.*tmuxsaver' ~/.tmux.conf)" = "1 2"
 }
 
 if [[ "${1:-}" == "--as-user" ]]; then
@@ -460,6 +527,8 @@ as_user bash
 as_user zsh
 as_user names_and_renames
 as_user custom_dir
+as_user closed_sessions
+as_user old_tmux_hook
 as_user unsetup "$WORK/bashrc.orig" "$WORK/zshrc.orig"
 as_user bash_profile
 as_user symlinked_tmux_conf
