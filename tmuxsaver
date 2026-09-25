@@ -25,7 +25,11 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.5.1"
+# Everything tmuxsaver writes (history, working directories, session names)
+# is private to the user.
+umask 077
+
+TMUXSAVER_VERSION="0.5.2"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -59,26 +63,37 @@ saved_session_dirs() {
     done
 }
 
-# A saved session was renamed: fold its data into the new name's directory
-# and leave a link in its place. Shells started before the rename still have
-# HISTFILE pointing into the old directory; through the link their history
-# keeps landing in the new one.
-merge_renamed() {
-    local old_dir=$1 new_name=$2
+# Put a renamed session's saved data (already moved aside to $1) under its
+# new name $2, then leave a link at its old encoded name $3.
+# The destination may be a link left by an earlier rename (e.g. renaming
+# work -> proj -> work): the link is replaced, never followed. It may also be
+# a real directory belonging to another saved session: then both histories
+# are kept, not overwritten.
+place_renamed() {
+    local staged=$1 new_name=$2 old_enc=$3
     local new_enc new_dir
     new_enc=$(encode_name "$new_name")
     new_dir="$SAVE_DIR/$new_enc"
-    mkdir -p "$new_dir"
-    if [[ -f "$old_dir/history" ]]; then
-        local tmp
-        tmp=$(mktemp) || return 1
-        { cat "$old_dir/history"; [[ -f "$new_dir/history" ]] && cat "$new_dir/history"; } > "$tmp"
-        cat "$tmp" > "$new_dir/history"
-        rm -f "$tmp"
+    [[ -L "$new_dir" ]] && rm -f "$new_dir"
+    if [[ -d "$new_dir" ]]; then
+        if [[ -f "$staged/history" ]]; then
+            local tmp
+            tmp=$(mktemp) || return 1
+            { cat "$staged/history"; [[ -f "$new_dir/history" ]] && cat "$new_dir/history"; } > "$tmp"
+            cat "$tmp" > "$new_dir/history"
+            rm -f "$tmp"
+        fi
+        rm -rf "$staged"
+    else
+        mv "$staged" "$new_dir"
     fi
-    rm -rf "$old_dir"
-    ln -s "$new_enc" "$old_dir"
-    info "Session '$(decode_name "$(basename "$old_dir")")' was renamed to '$new_name'; merged its saved data"
+    # Shells started before the rename still have HISTFILE pointing into the
+    # old directory; through the link their history keeps landing here. Only
+    # when the old name isn't in use again (e.g. two sessions swapped names).
+    if [[ ! -e "$SAVE_DIR/$old_enc" && ! -L "$SAVE_DIR/$old_enc" ]]; then
+        ln -s "$new_enc" "$SAVE_DIR/$old_enc"
+    fi
+    info "Session '$(decode_name "$old_enc")' was renamed to '$new_name'; moved its saved data"
 }
 
 # ---------------------------------------------------------------------------
@@ -97,6 +112,9 @@ cmd_save() {
     }
 
     mkdir -p "$SAVE_DIR"
+    # Older versions created this with the default umask (often group- or
+    # world-readable); history can contain secrets.
+    chmod 700 "$SAVE_DIR"
 
     # Renamed sessions: a saved directory whose recorded identity belongs to
     # a live session with a different name is that session's old name.
@@ -107,13 +125,29 @@ cmd_save() {
         id=$(session_identity "$session") && live_by_id[$id]=$session
     done <<< "$sessions"
     local dir saved_id
+    local -a renamed_dirs=() renamed_to=()
     while IFS= read -r dir; do
         [[ -f "$dir/id" ]] || continue
         saved_id=$(cat "$dir/id")
         [[ -n "${live_by_id[$saved_id]:-}" ]] || continue
         [[ "$(basename "$dir")" == "$(encode_name "${live_by_id[$saved_id]}")" ]] && continue
-        merge_renamed "$dir" "${live_by_id[$saved_id]}"
+        renamed_dirs+=("$dir")
+        renamed_to+=("${live_by_id[$saved_id]}")
     done < <(saved_session_dirs)
+    # Two phases, so renames that touch each other (a<->b swaps, renaming
+    # back to an earlier name) never overwrite data still waiting to move:
+    # first move every renamed directory aside, then place each one.
+    if [[ ${#renamed_dirs[@]} -gt 0 ]]; then
+        local stage i
+        stage=$(mktemp -d "$SAVE_DIR/.renaming.XXXXXX") || die "cannot create $SAVE_DIR/.renaming.*"
+        for i in "${!renamed_dirs[@]}"; do
+            mv "${renamed_dirs[$i]}" "$stage/$i"
+        done
+        for i in "${!renamed_dirs[@]}"; do
+            place_renamed "$stage/$i" "${renamed_to[$i]}" "$(basename "${renamed_dirs[$i]}")"
+        done
+        rmdir "$stage"
+    fi
     # Links whose target was forgotten are dead weight.
     for dir in "$SAVE_DIR"/*; do
         [[ -L "$dir" && ! -e "$dir" ]] && rm -f "$dir"
