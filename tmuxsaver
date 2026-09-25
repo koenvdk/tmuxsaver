@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.13"
+TMUXSAVER_VERSION="0.4.15"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -112,11 +112,19 @@ cmd_restore() {
 
     for session_dir in "$SAVE_DIR"/*/; do
         [[ -d "$session_dir" ]] || continue
+        session_dir="${session_dir%/}"
 
         local session
         session=$(basename "$session_dir")
         local workdir_file="$session_dir/workdir"
         local histfile="$session_dir/history"
+
+        # "=name" forces an exact match; a bare name prefix-matches, so a
+        # live "workbench" would make us skip restoring a saved "work".
+        if tmux has-session -t "=$session" 2>/dev/null; then
+            info "Session '$session' already exists — skipping"
+            continue
+        fi
 
         # A session with no workdir file (or one whose directory no longer
         # exists) is still worth restoring — fall back to $HOME rather than
@@ -128,32 +136,24 @@ cmd_restore() {
             warn "No saved workdir for session '$session'; restoring at \$HOME"
         fi
 
-        # "=name" forces an exact match; a bare name prefix-matches, so a
-        # live "workbench" would make us skip restoring a saved "work".
-        if tmux has-session -t "=$session" 2>/dev/null; then
-            info "Session '$session' already exists — skipping"
-            continue
-        fi
-
         if [[ ! -d "$workdir" ]]; then
             warn "Saved workdir '$workdir' for session '$session' no longer exists; using \$HOME"
             workdir="$HOME"
         fi
 
-        tmux new-session -d -s "$session" -c "$workdir"
+        # Hand the saved history file to the new shell through its
+        # environment. The shell reads HISTFILE when it starts, so the very
+        # first Up-arrow already shows the last command — in bash and zsh
+        # alike, with or without the ~/.bashrc hook (which computes the same
+        # path). Earlier versions typed `export HISTFILE=…; history -c;
+        # history -r` into the pane instead: that echoed into every restored
+        # session, and zsh has no `history -c`.
+        # The variable lives in the session environment, so later windows
+        # and panes in this session pick up the same history file too.
+        local env_args=()
+        [[ -f "$histfile" ]] && env_args=(-e "HISTFILE=$histfile")
 
-        # Point the new shell at the saved history file and load it now so the
-        # very first Up-arrow shows the last command.
-        # Leading space avoids adding this command to history itself
-        # (requires HISTCONTROL=ignorespace or ignoreboth).
-        # NOTE: do NOT append `history -s ''` here — pushing an empty entry
-        # makes the first Up-arrow show a blank line, forcing the user to press
-        # Up twice to reach their last command.
-        if [[ -f "$histfile" ]]; then
-            tmux send-keys -t "=$session:" \
-                " export HISTFILE='$histfile'; history -c; history -r" \
-                Enter
-        fi
+        tmux new-session -d -s "$session" -c "$workdir" ${env_args[@]+"${env_args[@]}"}
 
         info "Restored session '$session' at $workdir"
         count=$(( count + 1 ))

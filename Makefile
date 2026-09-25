@@ -55,6 +55,18 @@ clean:
 	# Remove generated copies inside packaging/ (keep DEBIAN/ meta files)
 	rm -rf packaging/usr/
 
+# ── Version bump ────────────────────────────────────────────────────────────
+# Usage: make bump V=0.4.16 — updates the script, the package control file and
+# the README's install commands. Merging the bump to main cuts the release.
+
+.PHONY: bump
+bump:
+	@[ -n "$(V)" ] || { echo "usage: make bump V=x.y.z"; exit 1; }
+	sed -i 's/^TMUXSAVER_VERSION=".*"/TMUXSAVER_VERSION="$(V)"/' tmuxsaver
+	sed -i 's/^Version:.*/Version: $(V)/' packaging/DEBIAN/control
+	sed -i 's/$(subst .,\.,$(VERSION))/$(V)/g' README.md
+	@echo "Bumped $(VERSION) -> $(V)"
+
 .PHONY: check
 check:
 	bash -n tmuxsaver

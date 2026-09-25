@@ -15,6 +15,54 @@ if [[ "$ACTION" != "remove" ]]; then
     exit 0
 fi
 
+# Print rc file $1 with every tmuxsaver shell block removed — the current
+# "# tmuxsaver:begin" … "# tmuxsaver:end" form and the old unterminated form
+# that ran to its closing `fi` — and with trailing blank lines dropped.
+# A block whose closing line is missing is kept as-is rather than taking the
+# rest of the file with it.
+strip_shell_hook() {
+    awk '
+        skip != "" {
+            block = block $0 "\n"
+            if ((skip == "end" && /^# tmuxsaver:end/) || (skip == "fi" && /^fi$/)) {
+                skip = ""; block = ""
+            }
+            next
+        }
+        /^# tmuxsaver:begin/             { skip = "end"; block = $0 "\n"; next }
+        /^# tmuxsaver shell integration/ { skip = "fi";  block = $0 "\n"; next }
+        /^$/ { blank = blank "\n"; next }
+        { printf "%s", blank; blank = ""; print }
+        END { if (skip != "") printf "%s%s", blank, block }
+    ' "$1"
+}
+
+# Replace file $1's contents with stdin. Writing through the existing file
+# (rather than swapping in a new one, as `sed -i` does) keeps its owner, mode
+# and any symlink — e.g. a dotfile manager's ~/.bashrc — intact.
+overwrite() {
+    local tmp
+    tmp=$(mktemp)
+    cat > "$tmp" && cat "$tmp" > "$1"
+    rm -f "$tmp"
+}
+
+# Print tmux.conf $1 without tmuxsaver's hook: a "# tmuxsaver:" marker line
+# immediately followed by a set-hook line that runs tmuxsaver. Trailing blank
+# lines are dropped so the separator setup-tmux added doesn't linger.
+strip_tmux_hook() {
+    awk '
+        held != "" {
+            if (/^set-hook.*tmuxsaver/) { held = ""; next }
+            printf "%s", blank; blank = ""; print held; held = ""
+        }
+        /^# tmuxsaver:/ { held = $0; next }
+        /^$/ { blank = blank "\n"; next }
+        { printf "%s", blank; blank = ""; print }
+        END { if (held != "") { printf "%s", blank; print held } }
+    ' "$1"
+}
+
 # ── Disable and stop services ─────────────────────────────────────────────────
 if command -v systemctl &>/dev/null; then
     systemctl --global disable tmuxsaver-save.service    2>/dev/null || true
@@ -30,27 +78,14 @@ if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
     # ── Remove shell hook from rc files ──────────────────────────────────────
     for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
         [[ -f "$rcfile" ]] || continue
-        python3 - "$rcfile" <<'PYEOF'
-import re, sys, pathlib
-p = pathlib.Path(sys.argv[1])
-content = p.read_text()
-content = re.sub(r'\n# tmuxsaver:begin.*?# tmuxsaver:end\n', '\n', content, flags=re.DOTALL)
-content = re.sub(r'\n# tmuxsaver shell integration.*?^fi\n', '\n', content, flags=re.DOTALL | re.MULTILINE)
-p.write_text(content)
-PYEOF
+        strip_shell_hook "$rcfile" | overwrite "$rcfile"
         echo "tmuxsaver: removed shell hook from $rcfile"
     done
 
     # ── Remove tmux.conf hook ─────────────────────────────────────────────────
     TMUX_CONF="$USER_HOME/.tmux.conf"
     if [[ -f "$TMUX_CONF" ]] && grep -qF "tmuxsaver" "$TMUX_CONF"; then
-        python3 - "$TMUX_CONF" <<'PYEOF'
-import re, sys, pathlib
-p = pathlib.Path(sys.argv[1])
-content = p.read_text()
-content = re.sub(r'\n# tmuxsaver:.*\nset-hook.*tmuxsaver.*\n', '\n', content)
-p.write_text(content)
-PYEOF
+        strip_tmux_hook "$TMUX_CONF" | overwrite "$TMUX_CONF"
         echo "tmuxsaver: removed hook from $TMUX_CONF"
     fi
 
