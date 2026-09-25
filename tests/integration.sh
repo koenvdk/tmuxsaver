@@ -70,10 +70,14 @@ diagnose() {
     tmux send-keys -t "=$session:" \
         ' echo "@@ shell=$0 HISTFILE=$HISTFILE TMUX_PANE=$TMUX_PANE PROMPT_COMMAND=${PROMPT_COMMAND:-}"' Enter
     sleep 1
-    echo "  --- diagnostics for session '$session':"
-    tmux capture-pane -p -t "=$session:" -S -30 | grep -v '^$' | sed 's/^/  | /'
-    echo "  | sessions dir: $(find ~/.tmuxsaver -maxdepth 3 2>/dev/null | tr '\n' ' ')"
-    echo "  | rc files: $(find ~ -maxdepth 1 -name '.*' -printf '%f ')"
+    # fd 3 is the scenario's real stdout: `check` silences fds 1 and 2.
+    {
+        echo "  --- diagnostics for session '$session':"
+        tmux capture-pane -p -t "=$session:" -S -30 | grep -v '^$' | sed 's/^/  | /'
+        echo "  | pane runs: $(tmux display -p -t "=$session:" '#{pane_current_command}'), default-shell: $(tmux show -gv default-shell)"
+        echo "  | sessions dir: $(find ~/.tmuxsaver -maxdepth 3 2>/dev/null | tr '\n' ' ')"
+        echo "  | rc files: $(find ~ -maxdepth 1 -name '.*' -printf '%f ')"
+    } >&3
 }
 
 user_bash() {
@@ -171,6 +175,7 @@ user_from_source() {
 }
 
 if [[ "${1:-}" == "--as-user" ]]; then
+    exec 3>&1   # lets diagnose() print from inside a silenced `check`
     shift
     scenario=$1; shift
     "user_$scenario" "$@"
