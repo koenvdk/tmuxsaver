@@ -15,14 +15,15 @@ On login, your saved tmux sessions are restored in the background — run `tmux 
 - Auto-restores sessions on login (via systemd user service) — without attaching; you `tmux attach` when you want
 - systemd user services as belt-and-suspenders backup
 - Single bash script, zero runtime dependencies beyond tmux (3.0 or newer) itself
+- Works with bash and zsh (other shells such as fish get working directories restored, but no per-session history)
 
 ## Installation
 
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.5.1/tmuxsaver_0.5.1_all.deb
-sudo apt install /tmp/tmuxsaver_0.5.1_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.5.2/tmuxsaver_0.5.2_all.deb
+sudo apt install /tmp/tmuxsaver_0.5.2_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -60,7 +61,7 @@ Each user on the machine runs `tmuxsaver setup` for themselves.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.5.1
+VER=0.5.2
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -95,11 +96,11 @@ reinstalls, and are only ever removed when you explicitly ask.
 
 ```bash
 # Update / reinstall (keeps saved sessions, never prompts)
-sudo apt install /tmp/tmuxsaver_0.5.1_all.deb
-sudo apt install --reinstall /tmp/tmuxsaver_0.5.1_all.deb
+sudo apt install /tmp/tmuxsaver_0.5.2_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.5.2_all.deb
 
 # Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
-sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.5.1_all.deb
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.5.2_all.deb
 
 # Uninstall. This undoes `tmuxsaver setup` for the user running sudo, and is
 # the only path that asks about removing saved sessions. Other users on the
@@ -108,7 +109,7 @@ sudo apt remove tmuxsaver
 ```
 
 > If `apt` doesn't pass the variable through to the package scripts, run the
-> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.5.1_all.deb`.
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.5.2_all.deb`.
 > You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
@@ -258,7 +259,7 @@ workstation. CI runs all three on every pull request.
 Releases are automatic. Bump the version in a PR and merge it:
 
 ```bash
-make bump V=0.5.1   # updates tmuxsaver, packaging/DEBIAN/control and README.md
+make bump V=0.5.2   # updates tmuxsaver, packaging/DEBIAN/control and README.md
 ```
 
 When a commit on `main` carries a version that has no `v<version>` tag yet, the

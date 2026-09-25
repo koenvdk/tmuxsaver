@@ -208,6 +208,34 @@ user_names_and_renames() {
     check "forget also removes the old name's link" test ! -e ~/.tmuxsaver/sessions/old
 
     check "save with no tmux server exits 0" tmuxsaver save -q
+
+    # Renaming back to an earlier name, and two sessions swapping names,
+    # must never lose history (0.5.1 deleted it in both cases).
+    rm -rf ~/.tmuxsaver
+    tmux new-session -d -s work -x 160 -c /tmp
+    tmux new-session -d -s swap1 -x 160 -c /tmp
+    tmux new-session -d -s swap2 -x 160 -c /var
+    wait_pane work '\$ *$'; wait_pane swap1 '\$ *$'; wait_pane swap2 '\$ *$'
+    run_in work 'echo work-history' >/dev/null
+    run_in swap1 'echo one-history' >/dev/null
+    run_in swap2 'echo two-history' >/dev/null
+    tmuxsaver save -q
+    tmux rename-session -t =work proj;  tmuxsaver save -q
+    tmux rename-session -t =proj work;  tmuxsaver save -q
+    check "renaming back keeps the history" grep -qx 'echo work-history' ~/.tmuxsaver/sessions/work/history
+    check "renaming back leaves no link loop" test -d ~/.tmuxsaver/sessions/work -a ! -L ~/.tmuxsaver/sessions/work
+    tmux rename-session -t =swap1 tmpname
+    tmux rename-session -t =swap2 swap1
+    tmux rename-session -t =tmpname swap2
+    tmuxsaver save -q
+    check "swapped names: each keeps its own history" \
+        bash -c 'grep -qx "echo one-history" ~/.tmuxsaver/sessions/swap2/history && grep -qx "echo two-history" ~/.tmuxsaver/sessions/swap1/history'
+    check "swapped names: each keeps its own workdir" \
+        bash -c '[[ $(cat ~/.tmuxsaver/sessions/swap2/workdir) == /tmp && $(cat ~/.tmuxsaver/sessions/swap1/workdir) == /var ]]'
+    check "saved data is private (sessions dir 700)" test "$(stat -c %a ~/.tmuxsaver/sessions)" = 700
+    check "history files are private (600)" \
+        bash -c '! find ~/.tmuxsaver/sessions -name history -perm /077 | grep -q .'
+    tmux kill-server
 }
 
 # --dir must reach the shell hook of restored sessions.
@@ -290,6 +318,8 @@ user_zsh() {
     tmux -f /dev/null start-server \; set -g exit-empty off \; set -g default-shell /usr/bin/zsh
     tmux new-session -d -s zs -x 160 -c /tmp
     wait_pane zs '% *$'
+    local i
+    for i in $(seq 1 40); do tmux send-keys -t =zs: "echo z$i" Enter; done
     check "zsh history is written per command" run_in zs 'cd /etc'
     tmuxsaver save -q
     tmux kill-server
@@ -303,6 +333,8 @@ user_zsh() {
     check "zsh restored pane is clean" bash -c '! tmux capture-pane -p -t =zs: | grep -q HISTFILE'
     tmux send-keys -t =zs: Up
     check "zsh first Up-arrow recalls the last command" wait_pane zs 'cd /etc$' 20
+    tmux send-keys -t =zs: C-u ' fc -ln 1 | grep -c "^echo z"' Enter
+    check "zsh restores all 40 earlier commands (not just HISTSIZE=30)" wait_pane zs '^40$' 30
     tmux kill-server
 }
 
@@ -399,7 +431,8 @@ BASHRC
 # "insecure directories" prompt on hosts with group-writable fpath dirs
 # (the GitHub runner). Keystrokes the test sends would answer that prompt.
 echo 'skip_global_compinit=1' > "$WORK/skel/.zshenv"
-echo 'HISTSIZE=1000' > "$WORK/skel/.zshrc"
+# No HISTSIZE: zsh then defaults to 30, which the hook must raise.
+echo '# zsh defaults' > "$WORK/skel/.zshrc"
 useradd -m -k "$WORK/skel" -s /bin/bash "$TEST_USER"
 cp "$HOME_DIR/.bashrc" "$WORK/bashrc.orig"
 cp "$HOME_DIR/.zshrc"  "$WORK/zshrc.orig"

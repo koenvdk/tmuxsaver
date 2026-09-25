@@ -9,7 +9,7 @@ if [[ -n "${TMUX:-}" ]]; then
         _ts_session=${_ts_session//\%/%25}   # \% : a bare % anchors to the end in zsh
         _ts_session=${_ts_session//\//%2F}
         export HISTFILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions/$_ts_session/history"
-        mkdir -p "$(dirname "$HISTFILE")"
+        (umask 077 && mkdir -p "$(dirname "$HISTFILE")")   # history is private
         # Flush history to the per-session file after every command, not only
         # on shell exit — so a long-running session's history is always on disk
         # and `tmuxsaver save` never reports it missing.
@@ -23,6 +23,10 @@ if [[ -n "${TMUX:-}" ]]; then
         elif [[ -n "${ZSH_VERSION:-}" ]]; then
             setopt INC_APPEND_HISTORY 2>/dev/null || true
             [[ ${SAVEHIST:-0} -gt 0 ]] || SAVEHIST=2000
+            # zsh keeps (and reloads) only HISTSIZE entries, which defaults
+            # to 30: without this a restored session would get back just the
+            # last 30 commands.
+            [[ ${HISTSIZE:-0} -ge $SAVEHIST ]] || HISTSIZE=$SAVEHIST
         fi
     fi
     unset _ts_session
