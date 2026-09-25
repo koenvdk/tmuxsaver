@@ -228,10 +228,30 @@ chmod -R a+rX "$WORK/src"
 
 section "install the .deb for $TEST_USER (python3 blocked)"
 pkill -u "$TEST_USER" 2>/dev/null; userdel -r "$TEST_USER" 2>/dev/null
-useradd -m -s /bin/bash "$TEST_USER"
-cp /etc/skel/.bashrc "$HOME_DIR/.bashrc"
-echo 'HISTSIZE=1000' > "$HOME_DIR/.zshrc"
-chown "$TEST_USER:" "$HOME_DIR/.bashrc" "$HOME_DIR/.zshrc"
+# Build the home directory from a controlled skeleton, not the host's
+# /etc/skel: CI images ship extras there (GitHub's runner adds a
+# .bash_profile that never sources .bashrc, so tmux's login shells would
+# skip the hook). Use a stock Debian/Ubuntu layout instead.
+mkdir -p "$WORK/skel"
+cat > "$WORK/skel/.profile" <<'PROFILE'
+# Stock Debian/Ubuntu behaviour: login shells read .bashrc.
+if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+fi
+PROFILE
+cat > "$WORK/skel/.bashrc" <<'BASHRC'
+# Minimal interactive bash setup (mirrors the relevant bits of Ubuntu's skel).
+case $- in *i*) ;; *) return ;; esac
+HISTCONTROL=ignoreboth
+shopt -s histappend
+PS1='\u@\h:\w\$ '
+BASHRC
+# Ubuntu's /etc/zsh/zshrc runs compinit, which stops at an interactive
+# "insecure directories" prompt on hosts with group-writable fpath dirs
+# (the GitHub runner). Keystrokes the test sends would answer that prompt.
+echo 'skip_global_compinit=1' > "$WORK/skel/.zshenv"
+echo 'HISTSIZE=1000' > "$WORK/skel/.zshrc"
+useradd -m -k "$WORK/skel" -s /bin/bash "$TEST_USER"
 cp "$HOME_DIR/.bashrc" "$WORK/bashrc.orig"
 cp "$HOME_DIR/.zshrc"  "$WORK/zshrc.orig"
 
