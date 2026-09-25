@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end tests for tmuxsaver.
 #
-# Builds the .deb, installs it for a throwaway user the way `sudo apt install`
-# would, drives real tmux sessions in bash and zsh (save, detach hook, restore,
-# forget), uninstalls it non-interactively, and checks the from-source
-# install.sh path. Every step asserts on what a user would actually see.
+# Builds the .deb, installs it the way `sudo apt install` would, runs the
+# per-user `tmuxsaver setup` for a throwaway user, drives real tmux sessions in
+# bash and zsh (save, detach hook, restore, forget), checks `unsetup` and the
+# non-interactive uninstall, and the from-source install.sh path. Every step
+# asserts on what a user would actually see.
 #
 # Needs root (it creates and deletes a user), tmux >= 3.0, zsh and dpkg-deb.
 # Meant for CI or a disposable container/VM:
@@ -78,6 +79,69 @@ diagnose() {
         echo "  | sessions dir: $(find ~/.tmuxsaver -maxdepth 3 2>/dev/null | tr '\n' ' ')"
         echo "  | rc files: $(find ~ -maxdepth 1 -name '.*' -printf '%f ')"
     } >&3
+}
+
+user_setup() {
+    section "tmuxsaver setup (as $USER)"
+    local out
+    out=$(tmuxsaver setup --no-linger 2>&1)
+    check "setup exits 0 without a systemd user manager" test $? -eq 0
+    check "setup explains the skipped services" grep -q "No systemd user manager" <<<"$out"
+    check "hook added to .bashrc once" test "$(grep -c '^# tmuxsaver:begin' ~/.bashrc)" = 1
+    check "hook added to .zshrc once"  test "$(grep -c '^# tmuxsaver:begin' ~/.zshrc)" = 1
+    check ".profile left alone (it already loads .bashrc)" bash -c '! grep -q tmuxsaver ~/.profile'
+    check "tmux hook uses /usr/bin/tmuxsaver" grep -qF "'/usr/bin/tmuxsaver' save" ~/.tmux.conf
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "second setup keeps one shell block" test "$(grep -c '^# tmuxsaver:begin' ~/.bashrc)" = 1
+    check "second setup keeps one tmux hook"   test "$(grep -c 'set-hook.*tmuxsaver' ~/.tmux.conf)" = 1
+}
+
+# $1/$2: pristine copies of .bashrc/.zshrc from before setup.
+user_unsetup() {
+    section "tmuxsaver unsetup (as $USER)"
+    tmuxsaver unsetup >/dev/null 2>&1
+    check "unsetup restores .bashrc byte-for-byte" cmp -s "$1" ~/.bashrc
+    check "unsetup restores .zshrc byte-for-byte"  cmp -s "$2" ~/.zshrc
+    check "unsetup removes the tmux.conf setup created" test ! -e ~/.tmux.conf
+    check "unsetup keeps saved sessions" test -d ~/.tmuxsaver/sessions
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1   # leave it set up for the uninstall test
+}
+
+# A login bash that reads a ~/.bash_profile which never sources ~/.bashrc
+# (GitHub's runner image ships one): the hook must go there too.
+user_bash_profile() {
+    section "~/.bash_profile that ignores .bashrc (as $USER)"
+    tmux kill-server 2>/dev/null; rm -rf ~/.tmuxsaver
+    printf 'export PATH="$HOME/bin:$PATH"\n' > ~/.bash_profile
+    cp ~/.bash_profile ~/.bash_profile.orig
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "setup hooks .bash_profile" grep -q '^# tmuxsaver:begin' ~/.bash_profile
+    tmux new-session -d -s bp -x 160 -c /tmp
+    wait_pane bp '\$ *$'
+    check "history recorded in a login shell that skips .bashrc" run_in bp 'cd /etc'
+    tmux kill-server
+    tmuxsaver unsetup -q >/dev/null 2>&1
+    check "unsetup restores .bash_profile" cmp -s ~/.bash_profile.orig ~/.bash_profile
+    rm -f ~/.bash_profile ~/.bash_profile.orig
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+}
+
+# Dotfile managers symlink ~/.tmux.conf; editing must go through the link.
+user_symlinked_tmux_conf() {
+    section "symlinked ~/.tmux.conf (as $USER)"
+    tmuxsaver unsetup -q >/dev/null 2>&1
+    mkdir -p ~/dotfiles
+    printf 'set -g mouse on\n' > ~/dotfiles/tmux.conf
+    ln -sf dotfiles/tmux.conf ~/.tmux.conf
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "setup keeps ~/.tmux.conf a symlink" test -L ~/.tmux.conf
+    check "hook written into the link target" grep -q tmuxsaver ~/dotfiles/tmux.conf
+    tmuxsaver unsetup -q >/dev/null 2>&1
+    check "unsetup keeps the symlink" test -L ~/.tmux.conf
+    check "unsetup restores the target" \
+        bash -c 'printf "set -g mouse on\n" | cmp -s - ~/dotfiles/tmux.conf'
+    rm -rf ~/.tmux.conf ~/dotfiles
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
 }
 
 user_bash() {
@@ -162,6 +226,7 @@ user_from_source() {
     section "from-source install.sh (as $USER)"
     local src=$1
     tmux kill-server 2>/dev/null
+    rm -f ~/.tmux.conf
     (cd "$src" && ./install.sh --no-systemd --no-linger </dev/null >/dev/null 2>&1)
     check "install.sh installs the binary"  test -x ~/.local/bin/tmuxsaver
     check "setup-shell finds its snippet"   bash -c '~/.local/bin/tmuxsaver setup-shell | grep -q "tmuxsaver:begin"'
@@ -266,24 +331,27 @@ install_deb() {
 }
 check "dpkg -i succeeds" install_deb
 check "package is installed"  bash -c 'dpkg -s tmuxsaver | grep -q "Status: install ok installed"'
-check "shell hook added to .bashrc" test "$(grep -c '^# tmuxsaver:begin' "$HOME_DIR/.bashrc")" = 1
-check "shell hook added to .zshrc"  test "$(grep -c '^# tmuxsaver:begin' "$HOME_DIR/.zshrc")" = 1
-check ".bashrc still owned by the user" test "$(stat -c %U "$HOME_DIR/.bashrc")" = "$TEST_USER"
-check "tmux hook uses /usr/bin/tmuxsaver" grep -qF "'/usr/bin/tmuxsaver' save" "$HOME_DIR/.tmux.conf"
+check "install leaves .bashrc alone" cmp -s "$WORK/bashrc.orig" "$HOME_DIR/.bashrc"
+check "install leaves .zshrc alone"  cmp -s "$WORK/zshrc.orig"  "$HOME_DIR/.zshrc"
+check "install creates no .tmux.conf" test ! -e "$HOME_DIR/.tmux.conf"
+check "install tells the user to run setup" grep -q "tmuxsaver setup" "$WORK/dpkg.log"
 check "reinstall succeeds" install_deb
-check "reinstall keeps one shell block" test "$(grep -c '^# tmuxsaver:begin' "$HOME_DIR/.bashrc")" = 1
-check "reinstall keeps one tmux hook"   test "$(grep -c 'set-hook.*tmuxsaver' "$HOME_DIR/.tmux.conf")" = 1
 
+as_user setup
+check ".bashrc still owned by the user" test "$(stat -c %U "$HOME_DIR/.bashrc")" = "$TEST_USER"
 as_user bash
 as_user zsh
+as_user unsetup "$WORK/bashrc.orig" "$WORK/zshrc.orig"
+as_user bash_profile
+as_user symlinked_tmux_conf
 
-section "uninstall without a terminal"
+section "uninstall without a terminal (undoes setup for SUDO_USER)"
 check "dpkg -r succeeds with no tty" \
     bash -c 'SUDO_USER="$1" DEBIAN_FRONTEND=noninteractive dpkg -r tmuxsaver </dev/null >/dev/null 2>&1' _ "$TEST_USER"
 check ".bashrc restored byte-for-byte" cmp -s "$WORK/bashrc.orig" "$HOME_DIR/.bashrc"
 check ".zshrc restored byte-for-byte"  cmp -s "$WORK/zshrc.orig"  "$HOME_DIR/.zshrc"
-check "tmux hook removed" bash -c '! grep -q tmuxsaver "$1"' _ "$HOME_DIR/.tmux.conf"
-check "saved sessions kept" test -d "$HOME_DIR/.tmuxsaver/sessions/zs"
+check "tmux.conf created by setup removed" test ! -e "$HOME_DIR/.tmux.conf"
+check "saved sessions kept" test -d "$HOME_DIR/.tmuxsaver/sessions"
 
 as_user from_source "$WORK/src"
 
