@@ -86,7 +86,17 @@ user_setup() {
     local out
     out=$(tmuxsaver setup --no-linger 2>&1)
     check "setup exits 0 without a systemd user manager" test $? -eq 0
-    check "setup explains the skipped services" grep -q "No systemd user manager" <<<"$out"
+    # Whether `su -` gives this user a systemd user manager depends on the
+    # host (GitHub's runner does, most containers don't). Test whichever
+    # path setup took.
+    if systemctl --user show-environment &>/dev/null; then
+        check "setup enables tmuxsaver-save.service" systemctl --user is-enabled -q tmuxsaver-save.service
+        check "setup starts tmuxsaver-save.service (ExecStop saves at logout)" \
+            systemctl --user is-active -q tmuxsaver-save.service
+        check "setup enables tmuxsaver-restore.service" systemctl --user is-enabled -q tmuxsaver-restore.service
+    else
+        check "setup explains the skipped services" grep -q "No systemd user manager" <<<"$out"
+    fi
     check "hook added to .bashrc once" test "$(grep -c '^# tmuxsaver:begin' ~/.bashrc)" = 1
     check "hook added to .zshrc once"  test "$(grep -c '^# tmuxsaver:begin' ~/.zshrc)" = 1
     check ".profile left alone (it already loads .bashrc)" bash -c '! grep -q tmuxsaver ~/.profile'
@@ -104,6 +114,10 @@ user_unsetup() {
     check "unsetup restores .zshrc byte-for-byte"  cmp -s "$2" ~/.zshrc
     check "unsetup removes the tmux.conf setup created" test ! -e ~/.tmux.conf
     check "unsetup keeps saved sessions" test -d ~/.tmuxsaver/sessions
+    if systemctl --user show-environment &>/dev/null; then
+        check "unsetup disables the services" \
+            bash -c '! systemctl --user is-enabled -q tmuxsaver-save.service && ! systemctl --user is-enabled -q tmuxsaver-restore.service'
+    fi
     tmuxsaver setup --no-linger -q >/dev/null 2>&1   # leave it set up for the uninstall test
 }
 
