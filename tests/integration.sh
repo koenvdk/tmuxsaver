@@ -59,7 +59,21 @@ run_in() {
         grep -qxF "$cmd" "$histfile" 2>/dev/null && return 0
         sleep 0.1
     done
+    diagnose "$session"
     return 1
+}
+
+# Print what the shell in session $1 actually sees, so a CI failure log says
+# why history went missing instead of only that it did.
+diagnose() {
+    local session=$1
+    tmux send-keys -t "=$session:" \
+        ' echo "@@ shell=$0 HISTFILE=$HISTFILE TMUX_PANE=$TMUX_PANE PROMPT_COMMAND=${PROMPT_COMMAND:-}"' Enter
+    sleep 1
+    echo "  --- diagnostics for session '$session':"
+    tmux capture-pane -p -t "=$session:" -S -30 | grep -v '^$' | sed 's/^/  | /'
+    echo "  | sessions dir: $(find ~/.tmuxsaver -maxdepth 3 2>/dev/null | tr '\n' ' ')"
+    echo "  | rc files: $(find ~ -maxdepth 1 -name '.*' -printf '%f ')"
 }
 
 user_bash() {
