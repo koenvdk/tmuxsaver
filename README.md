@@ -21,8 +21,8 @@ On login, your saved tmux sessions are restored in the background — run `tmux 
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.16/tmuxsaver_0.4.16_all.deb
-sudo apt install /tmp/tmuxsaver_0.4.16_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.4.17/tmuxsaver_0.4.17_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.17_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -41,7 +41,7 @@ Open a new shell (or `source ~/.bashrc`) for the hooks to take effect.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.4.16
+VER=0.4.17
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -77,18 +77,18 @@ reinstalls, and are only ever removed when you explicitly ask.
 
 ```bash
 # Update / reinstall (keeps saved sessions, never prompts)
-sudo apt install /tmp/tmuxsaver_0.4.16_all.deb
-sudo apt install --reinstall /tmp/tmuxsaver_0.4.16_all.deb
+sudo apt install /tmp/tmuxsaver_0.4.17_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.4.17_all.deb
 
 # Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
-sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.16_all.deb
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.4.17_all.deb
 
 # Uninstall (this is the only path that asks about removing saved sessions)
 sudo apt remove tmuxsaver
 ```
 
 > If `apt` doesn't pass the variable through to the package scripts, run the
-> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.16_all.deb`.
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.4.17_all.deb`.
 > You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
@@ -125,7 +125,7 @@ The installer **enables lingering by default**:
 
 - `.deb`: `postinst` runs `loginctl enable-linger` for the installing user.
   apt/dpkg run non-interactively, so it can't prompt — opt out with
-  `sudo TMUXSAVER_NO_LINGER=1 apt install /tmp/tmuxsaver_0.4.16_all.deb`.
+  `sudo TMUXSAVER_NO_LINGER=1 apt install /tmp/tmuxsaver_0.4.17_all.deb`.
 - `install.sh`: prompts (default yes) when run in a terminal; skip it with
   `--no-linger` or `TMUXSAVER_NO_LINGER=1`.
 
@@ -228,7 +228,7 @@ workstation. CI runs all three on every pull request.
 Releases are automatic. Bump the version in a PR and merge it:
 
 ```bash
-make bump V=0.4.16   # updates tmuxsaver, packaging/DEBIAN/control and README.md
+make bump V=0.4.17   # updates tmuxsaver, packaging/DEBIAN/control and README.md
 ```
 
 When a commit on `main` carries a version that has no `v<version>` tag yet, the
