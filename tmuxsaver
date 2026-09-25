@@ -10,9 +10,12 @@
 #   restore           Restore previously saved sessions
 #   list              List saved sessions
 #   forget <name>...  Remove saved data for one or more sessions
+#   forget --closed   Remove saved data for every closed session
+#   reopen <name>...  Restore sessions you closed (they're skipped otherwise)
+#   status            Show what is set up and whether history is recorded
 #   clean             Remove all saved session data
 #   setup-shell       Print the shell integration snippet
-#   setup-tmux        Add only the save-on-detach hook to ~/.tmux.conf
+#   setup-tmux        Add only the tmux hooks to ~/.tmux.conf
 #
 # Options:
 #   --dir <path>      Override save directory (default: ~/.tmuxsaver)
@@ -21,6 +24,7 @@
 #   --no-tmux-hook    setup: skip ~/.tmux.conf
 #   --no-systemd      setup: skip the systemd user services
 #   --no-linger       setup: don't enable lingering
+#   --keep-closed     setup: restore closed sessions too (don't mark them closed)
 #   --version, -v     Print the version
 
 set -uo pipefail
@@ -29,7 +33,7 @@ set -uo pipefail
 # is private to the user.
 umask 077
 
-TMUXSAVER_VERSION="0.5.2"
+TMUXSAVER_VERSION="0.6.0"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -62,6 +66,12 @@ saved_session_dirs() {
         [[ -d "$d" && ! -L "$d" ]] && printf '%s\n' "$d"
     done
 }
+
+# Sessions you close yourself (typing `exit` in the last pane, `tmux
+# kill-session`) are marked with a `closed` file. restore skips them; `list`
+# shows them; `reopen` brings them back; `forget --closed` deletes them.
+# Logout, shutdown and `tmux kill-server` never mark anything.
+is_closed() { [[ -f "$1/closed" ]]; }
 
 # Put a renamed session's saved data (already moved aside to $1) under its
 # new name $2, then leave a link at its old encoded name $3.
@@ -170,6 +180,7 @@ cmd_save() {
         workdir=$(tmux display-message -t "=$session:" -p '#{pane_current_path}' 2>/dev/null) || continue
         echo "$workdir" > "$session_dir/workdir"
         session_identity "$session" > "$session_dir/id"
+        rm -f "$session_dir/closed"   # recreated after being closed
 
         local histfile="$session_dir/history"
         if [[ -f "$histfile" ]]; then
@@ -219,6 +230,11 @@ cmd_restore() {
         session=$(decode_name "$(basename "$session_dir")")
         local workdir_file="$session_dir/workdir"
         local histfile="$session_dir/history"
+
+        if is_closed "$session_dir"; then
+            info "Session '$session' was closed — skipping (bring it back with: tmuxsaver reopen '$session')"
+            continue
+        fi
 
         # "=name" forces an exact match; a bare name prefix-matches, so a
         # live "workbench" would make us skip restoring a saved "work".
@@ -279,9 +295,10 @@ cmd_list() {
         session=$(decode_name "$(basename "$session_dir")")
         local workdir="(unknown)"
         [[ -f "$session_dir/workdir" ]] && workdir=$(cat "$session_dir/workdir")
-        local has_history="no"
+        local has_history="no" state=""
         [[ -f "$session_dir/history" ]] && has_history="yes"
-        printf "  %-20s  %s  (history: %s)\n" "$session" "$workdir" "$has_history"
+        is_closed "$session_dir" && state=", closed"
+        printf "  %-20s  %s  (history: %s%s)\n" "$session" "$workdir" "$has_history" "$state"
         found=$(( found + 1 ))
     done < <(saved_session_dirs)
 
@@ -309,10 +326,17 @@ cmd_clean() {
 # ---------------------------------------------------------------------------
 
 cmd_forget() {
-    [[ ${#FORGET_TARGETS[@]} -gt 0 ]] || \
-        die "forget requires at least one session name (see 'tmuxsaver list')"
-
     [[ -d "$SAVE_DIR" ]] || { info "No saved sessions to forget."; return 0; }
+
+    if [[ $FORGET_CLOSED -eq 1 ]]; then
+        local session_dir
+        while IFS= read -r session_dir; do
+            is_closed "$session_dir" && FORGET_TARGETS+=("$(decode_name "$(basename "$session_dir")")")
+        done < <(saved_session_dirs)
+        [[ ${#FORGET_TARGETS[@]} -gt 0 ]] || { info "No closed sessions to forget."; return 0; }
+    fi
+    [[ ${#FORGET_TARGETS[@]} -gt 0 ]] || \
+        die "forget requires a session name or --closed (see 'tmuxsaver list')"
 
     local removed=0
     for name in "${FORGET_TARGETS[@]}"; do
@@ -341,10 +365,45 @@ cmd_forget() {
 }
 
 # ---------------------------------------------------------------------------
+# Closed sessions
+# ---------------------------------------------------------------------------
+
+# Called by tmux's session-closed hook: `closed <name> <sessions-left>`.
+# tmux fires that hook for a deliberate close (exit / kill-session), not at
+# logout or shutdown. `tmux kill-server` fires it too, for some sessions, and
+# always with 0 sessions left, so a close that leaves nothing behind is
+# ignored: it can't be told apart from kill-server. (Closing your very last
+# session fires no hook at all.)
+cmd_closed() {
+    local name=${POSITIONAL[0]:-} left=${POSITIONAL[1]:-0}
+    [[ -n "$name" ]] || die "usage: tmuxsaver closed <session> <sessions-left>"
+    [[ "$left" =~ ^[0-9]+$ ]] && [[ "$left" -gt 0 ]] || return 0
+    local dir
+    dir="$SAVE_DIR/$(encode_name "$name")"
+    [[ -d "$dir" ]] || return 0
+    date '+%Y-%m-%d %H:%M:%S' > "$dir/closed"
+    info "Marked session '$name' as closed"
+}
+
+cmd_reopen() {
+    [[ ${#POSITIONAL[@]} -gt 0 ]] || die "reopen requires at least one session name (see 'tmuxsaver list')"
+    local name dir
+    for name in "${POSITIONAL[@]}"; do
+        dir="$SAVE_DIR/$(encode_name "$name")"
+        if [[ -f "$dir/closed" ]]; then
+            rm -f "$dir/closed"
+        elif [[ ! -d "$dir" ]]; then
+            warn "No saved session named '$name' (see 'tmuxsaver list')"
+        fi
+    done
+    cmd_restore
+}
+
+# ---------------------------------------------------------------------------
 # Integration helpers (shared by setup, unsetup, setup-shell, setup-tmux)
 # ---------------------------------------------------------------------------
 
-TMUX_HOOK_MARKER="# tmuxsaver: save on detach"
+TMUX_HOOK_MARKER="# tmuxsaver: save on detach, forget on close"
 
 # Path of the shell integration snippet: next to the binary first
 # (<prefix>/bin → <prefix>/share, as laid out by install.sh, `make install`
@@ -390,19 +449,20 @@ strip_shell_hook() {
     ' "$1"
 }
 
-# Print tmux.conf $1 without tmuxsaver's hook: a "# tmuxsaver:" marker line
-# immediately followed by a set-hook line that runs tmuxsaver. Trailing blank
+# Print tmux.conf $1 without tmuxsaver's hooks: a "# tmuxsaver:" marker line
+# immediately followed by one or more set-hook lines that run tmuxsaver. Trailing blank
 # lines are dropped.
 strip_tmux_hook() {
     awk '
         held != "" {
-            if (/^set-hook.*tmuxsaver/) { held = ""; next }
-            printf "%s", blank; blank = ""; print held; held = ""
+            if (/^set-hook.*tmuxsaver/) { consumed = 1; next }
+            if (!consumed) { printf "%s", blank; blank = ""; print held }
+            held = ""; consumed = 0
         }
-        /^# tmuxsaver:/ { held = $0; next }
+        /^# tmuxsaver:/ { held = $0; consumed = 0; next }
         /^$/ { blank = blank "\n"; next }
         { printf "%s", blank; blank = ""; print }
-        END { if (held != "") { printf "%s", blank; print held } }
+        END { if (held != "" && !consumed) { printf "%s", blank; print held } }
     ' "$1"
 }
 
@@ -477,8 +537,14 @@ cmd_setup_tmux() {
     # Use this binary's absolute path: the hook runs with the tmux server's
     # PATH, which (e.g. for a server started by systemd) often lacks
     # ~/.local/bin, so a bare `tmuxsaver` would silently never run.
-    local hookline
-    hookline="set-hook -ga client-detached \"run-shell -b \\\"'$(self_path)' save --quiet || true\\\"\""
+    local self hookline closeline=""
+    self=$(self_path)
+    hookline="set-hook -ga client-detached \"run-shell -b \\\"'$self' save --quiet || true\\\"\""
+    # #{q:...} shell-quotes the name; #{server_sessions} is how many sessions
+    # remain, which lets `closed` ignore tmux kill-server.
+    if [[ $KEEP_CLOSED -eq 0 ]]; then
+        closeline="set-hook -ga session-closed \"run-shell -b \\\"'$self' closed --quiet -- #{q:hook_session_name} #{server_sessions} || true\\\"\""
+    fi
 
     # Idempotent and migrating: drop any existing tmuxsaver hook (including
     # the old synchronous form), then append the current one after exactly
@@ -488,8 +554,13 @@ cmd_setup_tmux() {
     {
         [[ -n "$existing" ]] && printf '%s\n\n' "$existing"
         printf '%s\n%s\n' "$TMUX_HOOK_MARKER" "$hookline"
+        [[ -n "$closeline" ]] && printf '%s\n' "$closeline"
     } | overwrite "$tmux_conf"
-    info "Save-on-detach hook installed in $tmux_conf"
+    if [[ -n "$closeline" ]]; then
+        info "Save-on-detach and forget-on-close hooks installed in $tmux_conf"
+    else
+        info "Save-on-detach hook installed in $tmux_conf (closed sessions will be restored: --keep-closed)"
+    fi
     info "Reload a running server with: tmux source-file $tmux_conf"
 }
 
@@ -560,8 +631,103 @@ setup_linger() {
     fi
 }
 
+# tmux's version as a comparable integer (3.4 -> 304, "next-3.5" -> 305),
+# or 0 when unknown.
+tmux_version_num() {
+    local v
+    v=$(tmux -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    [[ -n "$v" ]] || { echo 0; return; }
+    echo $(( ${v%%.*} * 100 + 10#${v#*.} ))
+}
+
+check_tmux_version() {
+    command -v tmux &>/dev/null || { warn "tmux is not installed; tmuxsaver needs tmux 3.0 or newer."; return; }
+    local n
+    n=$(tmux_version_num)
+    if [[ $n -gt 0 && $n -lt 300 ]]; then
+        warn "$(tmux -V) is too old: restoring sessions needs tmux 3.0 or newer."
+    fi
+}
+
+# One line per piece of the setup, then whether *this* shell records history.
+cmd_status() {
+    local ok="ok" no="--" rc f line
+    echo "tmuxsaver $TMUXSAVER_VERSION"
+
+    if command -v tmux &>/dev/null; then
+        local n; n=$(tmux_version_num)
+        line="$(tmux -V)"; [[ $n -gt 0 && $n -lt 300 ]] && line+=" (too old: needs 3.0+)"
+    else
+        line="not installed"
+    fi
+    printf '  %-16s %s\n' "tmux:" "$line"
+
+    local saved=0 closed=0 d
+    while IFS= read -r d; do
+        saved=$(( saved + 1 ))
+        is_closed "$d" && closed=$(( closed + 1 ))
+    done < <([[ -d "$SAVE_DIR" ]] && saved_session_dirs)
+    printf '  %-16s %s (%d saved, %d closed)\n' "save dir:" "$SAVE_DIR" "$saved" "$closed"
+
+    line=""
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        has_shell_hook "$rc" && line+="${line:+, }${rc/#$HOME/\~}"
+    done
+    printf '  %-16s %s\n' "shell hook:" "${line:-$no not installed (run: tmuxsaver setup)}"
+    local missing
+    missing=$(shell_hook_targets | while IFS= read -r f; do has_shell_hook "$f" || printf '%s ' "${f/#$HOME/\~}"; done)
+    [[ -n "$missing" && -n "$line" ]] && printf '  %-16s %s\n' "" "$no also needed in: $missing(run: tmuxsaver setup)"
+
+    local conf="$HOME/.tmux.conf"
+    line="$no not installed (run: tmuxsaver setup)"
+    if [[ -f "$conf" ]] && grep -q 'set-hook.*client-detached.*tmuxsaver' "$conf"; then
+        line="$ok save on detach"
+        if grep -q 'set-hook.*session-closed.*tmuxsaver' "$conf"; then
+            line+=", forget on close"
+        else
+            line+=" (closed sessions are restored too)"
+        fi
+        if tmux list-sessions &>/dev/null && ! tmux show-hooks -g 2>/dev/null | grep -q tmuxsaver; then
+            line+="; not loaded in the running server (run: tmux source-file ~/.tmux.conf)"
+        fi
+    fi
+    printf '  %-16s %s\n' "tmux hooks:" "$line"
+
+    if have_user_systemd; then
+        local svc st parts=""
+        for svc in save restore; do
+            st=$(systemctl --user is-enabled "tmuxsaver-$svc.service" 2>/dev/null || true)
+            parts+="${parts:+, }$svc ${st:-not found}"
+        done
+        line="$parts"
+    else
+        line="$no no systemd user manager reachable from this shell"
+    fi
+    printf '  %-16s %s\n' "services:" "$line"
+
+    line="$no unknown"
+    if command -v loginctl &>/dev/null; then
+        case "$(loginctl show-user "${USER:-$(id -un)}" -p Linger --value 2>/dev/null)" in
+            yes) line="$ok enabled (live sessions survive logout)" ;;
+            no)  line="$no disabled (live sessions end at logout; saved data is kept)" ;;
+        esac
+    fi
+    printf '  %-16s %s\n' "lingering:" "$line"
+
+    if [[ -z "${TMUX:-}" ]]; then
+        line="not inside tmux"
+    elif [[ "${HISTFILE:-}" == "$SAVE_DIR/"* ]]; then
+        line="$ok recording to ${HISTFILE/#$HOME/\~}"
+    else
+        line="$no not recording (this shell started before the hook; open a new pane)"
+    fi
+    printf '  %-16s %s\n' "this shell:" "$line"
+    return 0
+}
+
 cmd_setup() {
     [[ $EUID -ne 0 ]] || warn "Running setup as root configures root's own account; run it as your normal user."
+    check_tmux_version
     [[ $DO_SHELL   -eq 1 ]] && setup_shell_hooks
     [[ $DO_TMUX    -eq 1 ]] && cmd_setup_tmux
     [[ $DO_SYSTEMD -eq 1 ]] && setup_systemd
@@ -588,16 +754,31 @@ usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0";
 
 COMMAND=""
 FORGET_TARGETS=()
+POSITIONAL=()
+FORGET_CLOSED=0
+KEEP_CLOSED=0
 DO_SHELL=1
 DO_TMUX=1
 DO_SYSTEMD=1
 DO_LINGER=1
 
+# The first non-option word is the command; later words are session names
+# (for forget, reopen and closed), so a session may be called "list" or
+# "save". Everything after `--` is a name, even if it starts with "-".
+add_name() {
+    case "$COMMAND" in
+        forget)          FORGET_TARGETS+=("$1") ;;
+        reopen|closed)   POSITIONAL+=("$1") ;;
+        *)               die "Unknown argument: $1 (try --help)" ;;
+    esac
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        save|restore|list|clean|forget|setup|unsetup|setup-shell|setup-tmux)
-            COMMAND="$1"
+        --)
             shift
+            [[ -n "$COMMAND" ]] || die "missing command (try --help)"
+            while [[ $# -gt 0 ]]; do add_name "$1"; shift; done
             ;;
         --dir)
             [[ -n "${2:-}" ]] || die "--dir requires a path argument"
@@ -605,14 +786,13 @@ while [[ $# -gt 0 ]]; do
             export TMUXSAVER_DIR="$2"
             shift 2
             ;;
-        --quiet|-q)
-            QUIET=1
-            shift
-            ;;
-        --no-shell-hook) DO_SHELL=0;   shift ;;
-        --no-tmux-hook)  DO_TMUX=0;    shift ;;
-        --no-systemd)    DO_SYSTEMD=0; shift ;;
-        --no-linger)     DO_LINGER=0;  shift ;;
+        --quiet|-q)      QUIET=1;       shift ;;
+        --no-shell-hook) DO_SHELL=0;    shift ;;
+        --no-tmux-hook)  DO_TMUX=0;     shift ;;
+        --no-systemd)    DO_SYSTEMD=0;  shift ;;
+        --no-linger)     DO_LINGER=0;   shift ;;
+        --keep-closed)   KEEP_CLOSED=1; shift ;;
+        --closed)        FORGET_CLOSED=1; shift ;;
         --version|-v)
             echo "tmuxsaver $TMUXSAVER_VERSION"
             exit 0
@@ -625,14 +805,16 @@ while [[ $# -gt 0 ]]; do
             die "Unknown option: $1 (try --help)"
             ;;
         *)
-            # Positional args are session names for `forget`; anything else is
-            # an error.
-            if [[ "$COMMAND" == "forget" ]]; then
-                FORGET_TARGETS+=("$1")
-                shift
+            if [[ -z "$COMMAND" ]]; then
+                case "$1" in
+                    save|restore|list|clean|forget|reopen|closed|status|setup|unsetup|setup-shell|setup-tmux)
+                        COMMAND="$1" ;;
+                    *) die "Unknown command: $1 (try --help)" ;;
+                esac
             else
-                die "Unknown argument: $1 (try --help)"
+                add_name "$1"
             fi
+            shift
             ;;
     esac
 done
@@ -644,6 +826,9 @@ case "$COMMAND" in
     restore)      cmd_restore ;;
     list)         cmd_list ;;
     forget)       cmd_forget ;;
+    reopen)       cmd_reopen ;;
+    closed)       cmd_closed ;;
+    status)       cmd_status ;;
     clean)        cmd_clean ;;
     setup)        cmd_setup ;;
     unsetup)      cmd_unsetup ;;
