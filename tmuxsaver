@@ -4,21 +4,28 @@
 # No windows, panes, or running programs are preserved.
 #
 # Usage: tmuxsaver <command> [options]
+#   setup             Set up tmuxsaver for your user (run once, as yourself)
+#   unsetup           Undo `setup` (saved sessions are kept)
 #   save              Save all current tmux sessions
 #   restore           Restore previously saved sessions
 #   list              List saved sessions
 #   forget <name>...  Remove saved data for one or more sessions
 #   clean             Remove all saved session data
 #   setup-shell       Print the shell integration snippet
-#   setup-tmux        Add save-on-detach hook to ~/.tmux.conf
+#   setup-tmux        Add only the save-on-detach hook to ~/.tmux.conf
 #
 # Options:
-#   --dir <path>  Override save directory (default: ~/.tmuxsaver)
-#   --quiet       Suppress informational output
+#   --dir <path>      Override save directory (default: ~/.tmuxsaver)
+#   --quiet, -q       Suppress informational output
+#   --no-shell-hook   setup: skip ~/.bashrc / ~/.zshrc
+#   --no-tmux-hook    setup: skip ~/.tmux.conf
+#   --no-systemd      setup: skip the systemd user services
+#   --no-linger       setup: don't enable lingering
+#   --version, -v     Print the version
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.4.17"
+TMUXSAVER_VERSION="0.5.0"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -234,12 +241,15 @@ cmd_forget() {
 }
 
 # ---------------------------------------------------------------------------
-# Setup-shell
+# Integration helpers (shared by setup, unsetup, setup-shell, setup-tmux)
 # ---------------------------------------------------------------------------
 
-cmd_setup_shell() {
-    # Look next to the binary first (<prefix>/bin → <prefix>/share, as laid
-    # out by install.sh, `make install` and the .deb), then the git checkout.
+TMUX_HOOK_MARKER="# tmuxsaver: save on detach"
+
+# Path of the shell integration snippet: next to the binary first
+# (<prefix>/bin → <prefix>/share, as laid out by install.sh, `make install`
+# and the .deb), then /usr/share, then the git checkout.
+find_snippet() {
     local bin_dir candidate
     bin_dir="$(dirname "$(realpath "$0")")"
     for candidate in \
@@ -247,20 +257,118 @@ cmd_setup_shell() {
         "/usr/share/tmuxsaver/tmuxsaver.sh" \
         "$bin_dir/shell/tmuxsaver.sh"; do
         if [[ -f "$candidate" ]]; then
-            cat "$candidate"
+            echo "$candidate"
             return 0
         fi
     done
-    die "shell integration snippet not found (looked under $bin_dir/../share/tmuxsaver)"
+    warn "shell integration snippet not found (looked under $bin_dir/../share/tmuxsaver)"
+    return 1
 }
 
-# ---------------------------------------------------------------------------
-# Setup-tmux
-# ---------------------------------------------------------------------------
+# This binary's absolute path, for hooks that run with someone else's PATH.
+self_path() { echo "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"; }
+
+# Print rc file $1 with every tmuxsaver shell block removed — the current
+# "# tmuxsaver:begin" … "# tmuxsaver:end" form and the old unterminated form
+# that ran to its closing `fi` — and with trailing blank lines dropped.
+# A block whose closing line is missing is kept as-is rather than taking the
+# rest of the file with it.
+strip_shell_hook() {
+    awk '
+        skip != "" {
+            block = block $0 "\n"
+            if ((skip == "end" && /^# tmuxsaver:end/) || (skip == "fi" && /^fi$/)) {
+                skip = ""; block = ""
+            }
+            next
+        }
+        /^# tmuxsaver:begin/             { skip = "end"; block = $0 "\n"; next }
+        /^# tmuxsaver shell integration/ { skip = "fi";  block = $0 "\n"; next }
+        /^$/ { blank = blank "\n"; next }
+        { printf "%s", blank; blank = ""; print }
+        END { if (skip != "") printf "%s%s", blank, block }
+    ' "$1"
+}
+
+# Print tmux.conf $1 without tmuxsaver's hook: a "# tmuxsaver:" marker line
+# immediately followed by a set-hook line that runs tmuxsaver. Trailing blank
+# lines are dropped.
+strip_tmux_hook() {
+    awk '
+        held != "" {
+            if (/^set-hook.*tmuxsaver/) { held = ""; next }
+            printf "%s", blank; blank = ""; print held; held = ""
+        }
+        /^# tmuxsaver:/ { held = $0; next }
+        /^$/ { blank = blank "\n"; next }
+        { printf "%s", blank; blank = ""; print }
+        END { if (held != "") { printf "%s", blank; print held } }
+    ' "$1"
+}
+
+# Replace file $1's contents with stdin. Writing through the existing file
+# (rather than swapping in a new one, as `sed -i` does) keeps its owner, mode
+# and any symlink — e.g. a dotfile manager's ~/.bashrc — intact.
+overwrite() {
+    local tmp
+    tmp=$(mktemp) || return 1
+    cat > "$tmp" && cat "$tmp" > "$1"
+    rm -f "$tmp"
+}
+
+has_shell_hook() {
+    grep -qE '^# tmuxsaver:begin|^# tmuxsaver shell integration' "$1" 2>/dev/null
+}
+
+# rc files that should carry the shell hook. tmux starts *login* shells, and
+# a login bash reads only the first of ~/.bash_profile, ~/.bash_login and
+# ~/.profile. Stock setups have that file source ~/.bashrc; when it doesn't,
+# the hook in ~/.bashrc would never run in tmux, so hook that file too.
+shell_hook_targets() {
+    local f
+    for f in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        [[ -f "$f" ]] && echo "$f"
+    done
+    for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        if [[ -f "$f" ]]; then
+            grep -q 'bashrc' "$f" || echo "$f"
+            break
+        fi
+    done
+}
+
+cmd_setup_shell() {
+    local snippet
+    snippet=$(find_snippet) || exit 1
+    cat "$snippet"
+}
+
+setup_shell_hooks() {
+    local snippet rc count=0
+    snippet=$(find_snippet) || return 1
+    while IFS= read -r rc; do
+        [[ -n "$rc" ]] || continue
+        # Idempotent: strip any existing block (old or new style), re-append.
+        { strip_shell_hook "$rc"; echo; cat "$snippet"; } | overwrite "$rc"
+        info "Shell hook installed in $rc"
+        count=$(( count + 1 ))
+    done < <(shell_hook_targets)
+    if [[ $count -eq 0 ]]; then
+        warn "No ~/.bashrc or ~/.zshrc found; add the hook yourself: tmuxsaver setup-shell >> <your rc file>"
+    fi
+}
+
+remove_shell_hooks() {
+    local rc
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        has_shell_hook "$rc" || continue
+        strip_shell_hook "$rc" | overwrite "$rc"
+        info "Shell hook removed from $rc"
+    done
+}
 
 cmd_setup_tmux() {
     local tmux_conf="$HOME/.tmux.conf"
-    local marker="# tmuxsaver: save on detach"
     # IMPORTANT: run-shell -b (background). A *synchronous* run-shell in the
     # client-detached hook blocks tmux's teardown and re-enters the server
     # (save calls tmux back), which can kill a pane's process on a graceful
@@ -269,38 +377,125 @@ cmd_setup_tmux() {
     # Use this binary's absolute path: the hook runs with the tmux server's
     # PATH, which (e.g. for a server started by systemd) often lacks
     # ~/.local/bin, so a bare `tmuxsaver` would silently never run.
-    local self
-    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    local hookline="set-hook -ga client-detached \"run-shell -b \\\"'$self' save --quiet || true\\\"\""
+    local hookline
+    hookline="set-hook -ga client-detached \"run-shell -b \\\"'$(self_path)' save --quiet || true\\\"\""
 
-    # Migrate in place: strip any existing tmuxsaver hook (including the old
-    # synchronous form) before re-adding, so upgrades pick up the -b version.
-    if [[ -f "$tmux_conf" ]] && grep -qF "$marker" "$tmux_conf"; then
-        sed -i "\|$marker|,+1d" "$tmux_conf"
-        info "Updating existing tmux hook in $tmux_conf"
+    # Idempotent and migrating: drop any existing tmuxsaver hook (including
+    # the old synchronous form), then append the current one after exactly
+    # one blank line.
+    local existing=""
+    [[ -f "$tmux_conf" ]] && existing=$(strip_tmux_hook "$tmux_conf")
+    {
+        [[ -n "$existing" ]] && printf '%s\n\n' "$existing"
+        printf '%s\n%s\n' "$TMUX_HOOK_MARKER" "$hookline"
+    } | overwrite "$tmux_conf"
+    info "Save-on-detach hook installed in $tmux_conf"
+    info "Reload a running server with: tmux source-file $tmux_conf"
+}
+
+remove_tmux_hook() {
+    local tmux_conf="$HOME/.tmux.conf"
+    [[ -f "$tmux_conf" ]] && grep -q tmuxsaver "$tmux_conf" || return 0
+    strip_tmux_hook "$tmux_conf" | overwrite "$tmux_conf"
+    # An empty tmux.conf is equivalent to none; `setup` usually created it.
+    if ! grep -q '[^[:space:]]' "$tmux_conf"; then
+        rm -f "$tmux_conf"
+        info "Removed $tmux_conf (only held the tmuxsaver hook)"
+    else
+        info "Save-on-detach hook removed from $tmux_conf"
     fi
+}
 
-    # Trim trailing blank lines so repeated runs don't accumulate them, then
-    # re-append with exactly one separating blank line.
-    while [[ -s "$tmux_conf" ]] && [[ -z "$(tail -n1 "$tmux_conf")" ]]; do
-        sed -i '$d' "$tmux_conf"
-    done
+# True when this process can talk to the user's systemd manager (false under
+# plain `su`/`sudo -u`, in containers, or without systemd).
+have_user_systemd() {
+    command -v systemctl &>/dev/null && systemctl --user show-environment &>/dev/null
+}
 
-    printf '\n%s\n%s\n' "$marker" "$hookline" >> "$tmux_conf"
-    info "Added save-on-detach hook to $tmux_conf"
-    info "Reload now with: tmux source-file $tmux_conf"
+setup_systemd() {
+    if ! have_user_systemd; then
+        warn "No systemd user manager reachable from this shell; skipping the services."
+        warn "Re-run 'tmuxsaver setup' from a normal login session to enable save-on-logout / restore-on-login."
+        return 0
+    fi
+    systemctl --user daemon-reload
+    # The save unit does its work in ExecStop, so it must be running now for
+    # a logout to trigger it. The restore unit only needs to start at login.
+    if systemctl --user enable --now tmuxsaver-save.service &>/dev/null \
+       && systemctl --user enable tmuxsaver-restore.service &>/dev/null; then
+        info "Enabled tmuxsaver-save.service (save on logout) and tmuxsaver-restore.service (restore on login)"
+    else
+        warn "Could not enable the systemd user services (are the unit files installed?)"
+    fi
+}
+
+remove_systemd() {
+    have_user_systemd || return 0
+    systemctl --user disable --now tmuxsaver-save.service tmuxsaver-restore.service &>/dev/null || true
+    info "Disabled the tmuxsaver systemd user services"
+}
+
+# Lingering keeps the user's systemd manager — and the tmux server the
+# restore service runs under it — alive after the last logout. Without it,
+# live sessions die at logout (saved data is kept either way).
+setup_linger() {
+    local user="${USER:-$(id -un)}"
+    command -v loginctl &>/dev/null || return 0
+    if [[ "$(loginctl show-user "$user" -p Linger --value 2>/dev/null)" == "yes" ]]; then
+        info "Lingering is already enabled for $user"
+        return 0
+    fi
+    if [[ -t 0 ]] && [[ $QUIET -eq 0 ]]; then
+        local answer
+        read -r -p "[tmuxsaver] Enable lingering so live tmux sessions survive a full logout? [Y/n] " answer || answer=y
+        if [[ ! "${answer:-y}" =~ ^[Yy] ]]; then
+            info "Skipped lingering. Enable it later with: loginctl enable-linger $user"
+            return 0
+        fi
+    fi
+    if loginctl enable-linger "$user" 2>/dev/null; then
+        info "Enabled lingering for $user (undo: loginctl disable-linger $user)"
+    else
+        warn "Could not enable lingering; ask an admin to run: sudo loginctl enable-linger $user"
+    fi
+}
+
+cmd_setup() {
+    [[ $EUID -ne 0 ]] || warn "Running setup as root configures root's own account; run it as your normal user."
+    [[ $DO_SHELL   -eq 1 ]] && setup_shell_hooks
+    [[ $DO_TMUX    -eq 1 ]] && cmd_setup_tmux
+    [[ $DO_SYSTEMD -eq 1 ]] && setup_systemd
+    [[ $DO_LINGER  -eq 1 ]] && [[ "${TMUXSAVER_NO_LINGER:-0}" != "1" ]] && setup_linger
+    info "Setup complete. Open a new shell (or run 'exec \$SHELL') for the history hook to take effect."
+    return 0
+}
+
+cmd_unsetup() {
+    remove_shell_hooks
+    remove_tmux_hook
+    remove_systemd
+    info "Lingering was left as-is (disable with: loginctl disable-linger ${USER:-$(id -un)})"
+    [[ -d "$SAVE_DIR" ]] && info "Saved sessions kept in $SAVE_DIR (delete with: tmuxsaver clean)"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+# Print the header comment block (everything up to the first non-comment).
+usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"; }
+
 COMMAND=""
 FORGET_TARGETS=()
+DO_SHELL=1
+DO_TMUX=1
+DO_SYSTEMD=1
+DO_LINGER=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        save|restore|list|clean|forget|setup-shell|setup-tmux)
+        save|restore|list|clean|forget|setup|unsetup|setup-shell|setup-tmux)
             COMMAND="$1"
             shift
             ;;
@@ -313,12 +508,16 @@ while [[ $# -gt 0 ]]; do
             QUIET=1
             shift
             ;;
+        --no-shell-hook) DO_SHELL=0;   shift ;;
+        --no-tmux-hook)  DO_TMUX=0;    shift ;;
+        --no-systemd)    DO_SYSTEMD=0; shift ;;
+        --no-linger)     DO_LINGER=0;  shift ;;
         --version|-v)
             echo "tmuxsaver $TMUXSAVER_VERSION"
             exit 0
             ;;
         --help|-h)
-            sed -n '2,13p' "$0"
+            usage
             exit 0
             ;;
         -*)
@@ -337,7 +536,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$COMMAND" ]] || { sed -n '2,13p' "$0"; exit 1; }
+[[ -n "$COMMAND" ]] || { usage; exit 1; }
 
 case "$COMMAND" in
     save)         cmd_save ;;
@@ -345,6 +544,8 @@ case "$COMMAND" in
     list)         cmd_list ;;
     forget)       cmd_forget ;;
     clean)        cmd_clean ;;
+    setup)        cmd_setup ;;
+    unsetup)      cmd_unsetup ;;
     setup-shell)  cmd_setup_shell ;;
     setup-tmux)   cmd_setup_tmux ;;
 esac

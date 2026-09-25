@@ -5,97 +5,32 @@ set -e
 #   remove                → genuine uninstall
 #   upgrade <new-version> → upgrade OR `apt install --reinstall`
 #   failed-upgrade ...    → recovery path
-# Only a genuine `remove` should tear down the integration and ask about the
-# user's saved session data. On upgrade/reinstall we must do nothing: the
-# incoming postinst reconciles services and hooks, and session data must be
-# preserved silently. To wipe data during a reinstall, use the postinst's
-# TMUXSAVER_PURGE_DATA=1 opt-in instead (see README "reinstallclean").
+# Only a genuine `remove` tears anything down. On upgrade/reinstall we must
+# do nothing: users' setup and session data are preserved silently.
 ACTION="${1:-remove}"
 if [[ "$ACTION" != "remove" ]]; then
     exit 0
 fi
 
-# Print rc file $1 with every tmuxsaver shell block removed — the current
-# "# tmuxsaver:begin" … "# tmuxsaver:end" form and the old unterminated form
-# that ran to its closing `fi` — and with trailing blank lines dropped.
-# A block whose closing line is missing is kept as-is rather than taking the
-# rest of the file with it.
-strip_shell_hook() {
-    awk '
-        skip != "" {
-            block = block $0 "\n"
-            if ((skip == "end" && /^# tmuxsaver:end/) || (skip == "fi" && /^fi$/)) {
-                skip = ""; block = ""
-            }
-            next
-        }
-        /^# tmuxsaver:begin/             { skip = "end"; block = $0 "\n"; next }
-        /^# tmuxsaver shell integration/ { skip = "fi";  block = $0 "\n"; next }
-        /^$/ { blank = blank "\n"; next }
-        { printf "%s", blank; blank = ""; print }
-        END { if (skip != "") printf "%s%s", blank, block }
-    ' "$1"
-}
-
-# Replace file $1's contents with stdin. Writing through the existing file
-# (rather than swapping in a new one, as `sed -i` does) keeps its owner, mode
-# and any symlink — e.g. a dotfile manager's ~/.bashrc — intact.
-overwrite() {
-    local tmp
-    tmp=$(mktemp)
-    cat > "$tmp" && cat "$tmp" > "$1"
-    rm -f "$tmp"
-}
-
-# Print tmux.conf $1 without tmuxsaver's hook: a "# tmuxsaver:" marker line
-# immediately followed by a set-hook line that runs tmuxsaver. Trailing blank
-# lines are dropped so the separator setup-tmux added doesn't linger.
-strip_tmux_hook() {
-    awk '
-        held != "" {
-            if (/^set-hook.*tmuxsaver/) { held = ""; next }
-            printf "%s", blank; blank = ""; print held; held = ""
-        }
-        /^# tmuxsaver:/ { held = $0; next }
-        /^$/ { blank = blank "\n"; next }
-        { printf "%s", blank; blank = ""; print }
-        END { if (held != "") { printf "%s", blank; print held } }
-    ' "$1"
-}
-
-# ── Disable and stop services ─────────────────────────────────────────────────
+# ── Legacy global service enablement (versions before 0.5.0) ─────────────────
 if command -v systemctl &>/dev/null; then
     systemctl --global disable tmuxsaver-save.service    2>/dev/null || true
     systemctl --global disable tmuxsaver-restore.service 2>/dev/null || true
-    systemctl --user   stop    tmuxsaver-save.service    2>/dev/null || true
-    systemctl --user   stop    tmuxsaver-restore.service 2>/dev/null || true
-    systemctl --user   daemon-reload                     2>/dev/null || true
 fi
 
+# ── Undo `tmuxsaver setup` for the user running the removal ─────────────────
+# Other users' setups can't be reached from here; their hooks become inert
+# once the binary is gone, and `tmuxsaver unsetup` before removal cleans them.
 if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    USER_UID=$(id -u "$SUDO_USER")
 
-    # ── Remove shell hook from rc files ──────────────────────────────────────
-    for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
-        [[ -f "$rcfile" ]] || continue
-        strip_shell_hook "$rcfile" | overwrite "$rcfile"
-        echo "tmuxsaver: removed shell hook from $rcfile"
-    done
-
-    # ── Remove tmux.conf hook ─────────────────────────────────────────────────
-    TMUX_CONF="$USER_HOME/.tmux.conf"
-    if [[ -f "$TMUX_CONF" ]] && grep -qF "tmuxsaver" "$TMUX_CONF"; then
-        strip_tmux_hook "$TMUX_CONF" | overwrite "$TMUX_CONF"
-        echo "tmuxsaver: removed hook from $TMUX_CONF"
-    fi
-
-    # ── Remove manually installed binary if present ───────────────────────────
-    for binpath in "$USER_HOME/.local/bin/tmuxsaver" "/usr/local/bin/tmuxsaver"; do
-        if [[ -f "$binpath" ]]; then
-            rm -f "$binpath"
-            echo "tmuxsaver: removed $binpath"
-        fi
-    done
+    # Run as the user, in their own environment, so files keep their owner
+    # and `systemctl --user` reaches their manager when it is running.
+    runuser -u "$SUDO_USER" -- env -i \
+        HOME="$USER_HOME" USER="$SUDO_USER" LOGNAME="$SUDO_USER" PATH="/usr/bin:/bin" \
+        XDG_RUNTIME_DIR="/run/user/$USER_UID" \
+        /usr/bin/tmuxsaver unsetup 2>&1 | sed 's/^\[tmuxsaver\]/tmuxsaver:/' || true
 
     # ── Session data ──────────────────────────────────────────────────────────
     SESSION_DIR="$USER_HOME/.tmuxsaver"

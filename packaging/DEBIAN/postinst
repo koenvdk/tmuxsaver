@@ -1,49 +1,15 @@
 #!/bin/bash
 set -e
 
-SNIPPET=/usr/share/tmuxsaver/tmuxsaver.sh
+# The package installs files only. Per-user integration — the shell history
+# hook, the tmux save-on-detach hook, the systemd user services and lingering
+# — is `tmuxsaver setup`, which each user runs as themselves. This script
+# never edits anyone's rc files.
+#
+# dpkg calls this as `postinst configure <old-version>`; <old-version> is
+# empty on a fresh install.
+OLD_VERSION="${2:-}"
 
-# Print rc file $1 with every tmuxsaver shell block removed — the current
-# "# tmuxsaver:begin" … "# tmuxsaver:end" form and the old unterminated form
-# that ran to its closing `fi` — and with trailing blank lines dropped.
-# A block whose closing line is missing is kept as-is rather than taking the
-# rest of the file with it.
-strip_shell_hook() {
-    awk '
-        skip != "" {
-            block = block $0 "\n"
-            if ((skip == "end" && /^# tmuxsaver:end/) || (skip == "fi" && /^fi$/)) {
-                skip = ""; block = ""
-            }
-            next
-        }
-        /^# tmuxsaver:begin/             { skip = "end"; block = $0 "\n"; next }
-        /^# tmuxsaver shell integration/ { skip = "fi";  block = $0 "\n"; next }
-        /^$/ { blank = blank "\n"; next }
-        { printf "%s", blank; blank = ""; print }
-        END { if (skip != "") printf "%s%s", blank, block }
-    ' "$1"
-}
-
-# Replace file $1's contents with stdin. Writing through the existing file
-# (rather than swapping in a new one, as `sed -i` does) keeps its owner, mode
-# and any symlink — e.g. a dotfile manager's ~/.bashrc — intact.
-overwrite() {
-    local tmp
-    tmp=$(mktemp)
-    cat > "$tmp" && cat "$tmp" > "$1"
-    rm -f "$tmp"
-}
-
-# ── Systemd: enable save-on-logout and restore-on-login for all users ────────
-if command -v systemctl &>/dev/null; then
-    systemctl --global enable tmuxsaver-save.service 2>/dev/null && \
-        echo "tmuxsaver: enabled tmuxsaver-save.service globally (save on logout)"
-    systemctl --global enable tmuxsaver-restore.service 2>/dev/null && \
-        echo "tmuxsaver: enabled tmuxsaver-restore.service globally (restore on login)"
-fi
-
-# ── Per-user setup ────────────────────────────────────────────────────────────
 if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 
@@ -56,17 +22,6 @@ if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
         echo "tmuxsaver: purged saved session data (TMUXSAVER_PURGE_DATA=1)"
     fi
 
-    for rcfile in "$USER_HOME/.bashrc" "$USER_HOME/.zshrc"; do
-        [[ -f "$rcfile" ]] || continue
-
-        # Remove any existing tmuxsaver block (old or new style) then re-append.
-        { strip_shell_hook "$rcfile"; echo; cat "$SNIPPET"; } | overwrite "$rcfile"
-        echo "tmuxsaver: shell hook updated in $rcfile"
-    done
-
-    # tmux save-on-detach hook
-    sudo -u "$SUDO_USER" tmuxsaver setup-tmux 2>/dev/null || true
-
     # ── Remove from-source binaries that would shadow /usr/bin/tmuxsaver ─────
     # ~/.local/bin and /usr/local/bin are typically earlier in PATH than
     # /usr/bin, so a leftover copy from `./install.sh` keeps running after the
@@ -77,33 +32,24 @@ if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
             echo "tmuxsaver: removed shadowing copy at $binpath"
         fi
     done
-
-    # ── Keep the tmux server alive across a FULL logout/disconnect ───────────
-    # The restore service runs the tmux server under the user's systemd manager
-    # (user@UID.service). With linger OFF, logind stops that manager when the
-    # user's LAST login session ends — killing the tmux server and every live
-    # pane process. Enabling linger keeps the manager (and the server) running
-    # with zero sessions: the systemd-sanctioned way to persist a user daemon
-    # past logout. Saved data is restored regardless; linger is what preserves
-    # the *running* sessions. Default on; opt out with TMUXSAVER_NO_LINGER=1.
-    # NOTE: apt/dpkg run postinst non-interactively, so we can't reliably prompt
-    # here (that would need debconf) — hence default-on + an env opt-out.
-    if [[ "${TMUXSAVER_NO_LINGER:-0}" != "1" ]] && command -v loginctl &>/dev/null; then
-        if loginctl enable-linger "$SUDO_USER" 2>/dev/null; then
-            echo "tmuxsaver: enabled lingering for $SUDO_USER — live sessions now survive a full logout"
-            echo "tmuxsaver:   undo with 'loginctl disable-linger $SUDO_USER'; skip next time with TMUXSAVER_NO_LINGER=1"
-        else
-            echo "tmuxsaver: could not enable lingering (run: sudo loginctl enable-linger $SUDO_USER)"
-        fi
-    fi
 fi
 
 echo ""
-echo "tmuxsaver installed."
-echo "  - Sessions are saved automatically when you detach from tmux."
-echo ""
-echo "Reload your shell now:  source ~/.bashrc"
-echo ""
-echo "Sessions will be restored on your next login (via systemd user service),"
-echo "without attaching. Run 'tmux attach' when you want to enter them."
+if [[ -n "$OLD_VERSION" ]] && dpkg --compare-versions "$OLD_VERSION" lt 0.5.0; then
+    # Versions before 0.5.0 set users up from this script and enabled the
+    # services globally. That setup keeps working untouched; `tmuxsaver setup`
+    # moves it to the per-user model (it is idempotent and safe to run).
+    echo "tmuxsaver upgraded from $OLD_VERSION. Your existing setup keeps working."
+    echo "Setup is now per user: run 'tmuxsaver setup' once as your normal user"
+    echo "(not with sudo) to refresh your hooks and enable your own services."
+else
+    echo "tmuxsaver installed. Finish setting up by running, as your normal user"
+    echo "(not with sudo):"
+    echo ""
+    echo "    tmuxsaver setup"
+    echo ""
+    echo "It adds the history hook to your shell rc files, a save-on-detach hook"
+    echo "to ~/.tmux.conf, and enables save-on-logout / restore-on-login."
+    echo "See 'tmuxsaver --help' for opt-outs; undo with 'tmuxsaver unsetup'."
+fi
 echo ""
