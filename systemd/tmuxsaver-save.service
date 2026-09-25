@@ -3,6 +3,10 @@ Description=Save tmux sessions before logout / shutdown
 # Run as late as possible during user-session teardown
 DefaultDependencies=no
 Before=default.target
+# Units stop in reverse start order. The tmux server lives in the restore
+# unit's cgroup, so ordering save after restore makes save's ExecStop run
+# while the server (and its sessions) are still there.
+After=tmuxsaver-restore.service
 
 [Service]
 Type=oneshot

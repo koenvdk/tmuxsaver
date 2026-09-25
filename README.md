@@ -21,8 +21,8 @@ On login, your saved tmux sessions are restored in the background — run `tmux 
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.5.0/tmuxsaver_0.5.0_all.deb
-sudo apt install /tmp/tmuxsaver_0.5.0_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.5.1/tmuxsaver_0.5.1_all.deb
+sudo apt install /tmp/tmuxsaver_0.5.1_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -60,7 +60,7 @@ Each user on the machine runs `tmuxsaver setup` for themselves.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.5.0
+VER=0.5.1
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -95,11 +95,11 @@ reinstalls, and are only ever removed when you explicitly ask.
 
 ```bash
 # Update / reinstall (keeps saved sessions, never prompts)
-sudo apt install /tmp/tmuxsaver_0.5.0_all.deb
-sudo apt install --reinstall /tmp/tmuxsaver_0.5.0_all.deb
+sudo apt install /tmp/tmuxsaver_0.5.1_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.5.1_all.deb
 
 # Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
-sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.5.0_all.deb
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.5.1_all.deb
 
 # Uninstall. This undoes `tmuxsaver setup` for the user running sudo, and is
 # the only path that asks about removing saved sessions. Other users on the
@@ -108,7 +108,7 @@ sudo apt remove tmuxsaver
 ```
 
 > If `apt` doesn't pass the variable through to the package scripts, run the
-> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.5.0_all.deb`.
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.5.1_all.deb`.
 > You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
@@ -120,6 +120,12 @@ sudo apt remove tmuxsaver
 **Restoring** happens automatically on login via `tmuxsaver-restore.service` (enabled by `tmuxsaver setup`). Sessions are re-created in the background and **never attached for you** — run `tmux attach` to pick them up when you want.
 
 **Removing.** Closing a session in tmux does *not* delete its saved copy (`save` only ever adds — it never prunes, so a partial save can't wipe your other sessions). Drop saved sessions you no longer want with `tmuxsaver forget <name>...`, or wipe everything with `tmuxsaver clean`.
+
+**Renaming** a session is handled on the next save. Its saved history moves
+to the new name, and the old name stays behind as a link, so shells started
+before the rename keep recording into the right place. The old name is not
+restored as a separate session. Session names may contain `/`; on disk they're
+stored percent-encoded (`web/api` → `web%2Fapi`).
 
 Alternative / supplemental:
 - `tmuxsaver restore` — run it by hand any time (e.g. after killing the server)
@@ -211,6 +217,8 @@ Options available on all commands:
 
 ```
 --dir <path>    Use a custom save directory instead of ~/.tmuxsaver
+                (to make it permanent, export TMUXSAVER_DIR=<path> in your
+                shell rc before the tmuxsaver block; the hook honours it too)
 --quiet, -q     Suppress informational output (useful in scripts/services)
 ```
 
@@ -250,7 +258,7 @@ workstation. CI runs all three on every pull request.
 Releases are automatic. Bump the version in a PR and merge it:
 
 ```bash
-make bump V=0.5.0   # updates tmuxsaver, packaging/DEBIAN/control and README.md
+make bump V=0.5.1   # updates tmuxsaver, packaging/DEBIAN/control and README.md
 ```
 
 When a commit on `main` carries a version that has no `v<version>` tag yet, the

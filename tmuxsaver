@@ -25,7 +25,7 @@
 
 set -uo pipefail
 
-TMUXSAVER_VERSION="0.5.0"
+TMUXSAVER_VERSION="0.5.1"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -38,11 +38,47 @@ info() { log "[tmuxsaver] $*"; }
 warn() { echo "[tmuxsaver] WARNING: $*" >&2; }
 die()  { echo "[tmuxsaver] ERROR: $*" >&2; exit 1; }
 
-require_tmux() {
-    command -v tmux &>/dev/null || die "tmux is not installed or not in PATH"
-    # Use list-sessions (== `tmux ls`) as the probe: `tmux info` can fail in
-    # contexts without a TTY/target even when a server is running.
-    tmux list-sessions &>/dev/null || die "no tmux server is running"
+# Session name <-> directory name. tmux allows "/" in session names (it only
+# rewrites "." and ":"), so store names percent-encoded: "%" -> %25 and
+# "/" -> %2F. The shell hook in shell/tmuxsaver.sh encodes the same way.
+encode_name() { local n=${1//\%/%25}; printf '%s' "${n//\//%2F}"; }
+decode_name() { local n=${1//%2F//}; printf '%s' "${n//%25/%}"; }
+
+# Identity of a live session that survives a rename: server pid, session id
+# and creation time. Used by save to recognise a renamed session.
+session_identity() {
+    tmux display-message -t "=$1:" -p '#{pid}:#{session_id}:#{session_created}' 2>/dev/null
+}
+
+# Saved-session directories, skipping the links left behind by renames.
+saved_session_dirs() {
+    local d
+    for d in "$SAVE_DIR"/*/; do
+        d="${d%/}"
+        [[ -d "$d" && ! -L "$d" ]] && printf '%s\n' "$d"
+    done
+}
+
+# A saved session was renamed: fold its data into the new name's directory
+# and leave a link in its place. Shells started before the rename still have
+# HISTFILE pointing into the old directory; through the link their history
+# keeps landing in the new one.
+merge_renamed() {
+    local old_dir=$1 new_name=$2
+    local new_enc new_dir
+    new_enc=$(encode_name "$new_name")
+    new_dir="$SAVE_DIR/$new_enc"
+    mkdir -p "$new_dir"
+    if [[ -f "$old_dir/history" ]]; then
+        local tmp
+        tmp=$(mktemp) || return 1
+        { cat "$old_dir/history"; [[ -f "$new_dir/history" ]] && cat "$new_dir/history"; } > "$tmp"
+        cat "$tmp" > "$new_dir/history"
+        rm -f "$tmp"
+    fi
+    rm -rf "$old_dir"
+    ln -s "$new_enc" "$old_dir"
+    info "Session '$(decode_name "$(basename "$old_dir")")' was renamed to '$new_name'; merged its saved data"
 }
 
 # ---------------------------------------------------------------------------
@@ -50,22 +86,47 @@ require_tmux() {
 # ---------------------------------------------------------------------------
 
 cmd_save() {
-    require_tmux
+    command -v tmux &>/dev/null || die "tmux is not installed or not in PATH"
 
+    # No server means nothing to save — not an error. The logout service and
+    # the detach hook both run save when there may be no server left.
     local sessions
     sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null) || {
-        info "No active tmux sessions to save."
+        info "No tmux server running; nothing to save."
         return 0
     }
 
     mkdir -p "$SAVE_DIR"
+
+    # Renamed sessions: a saved directory whose recorded identity belongs to
+    # a live session with a different name is that session's old name.
+    local -A live_by_id=()
+    local session id
+    while IFS= read -r session; do
+        [[ -n "$session" ]] || continue
+        id=$(session_identity "$session") && live_by_id[$id]=$session
+    done <<< "$sessions"
+    local dir saved_id
+    while IFS= read -r dir; do
+        [[ -f "$dir/id" ]] || continue
+        saved_id=$(cat "$dir/id")
+        [[ -n "${live_by_id[$saved_id]:-}" ]] || continue
+        [[ "$(basename "$dir")" == "$(encode_name "${live_by_id[$saved_id]}")" ]] && continue
+        merge_renamed "$dir" "${live_by_id[$saved_id]}"
+    done < <(saved_session_dirs)
+    # Links whose target was forgotten are dead weight.
+    for dir in "$SAVE_DIR"/*; do
+        [[ -L "$dir" && ! -e "$dir" ]] && rm -f "$dir"
+    done
+
     local count=0
     local missing_history=()
 
     while IFS= read -r session; do
         [[ -z "$session" ]] && continue
 
-        local session_dir="$SAVE_DIR/$session"
+        local session_dir
+        session_dir="$SAVE_DIR/$(encode_name "$session")"
         mkdir -p "$session_dir"
 
         # Working directory: use the most recently active pane.
@@ -74,6 +135,7 @@ cmd_save() {
         local workdir
         workdir=$(tmux display-message -t "=$session:" -p '#{pane_current_path}' 2>/dev/null) || continue
         echo "$workdir" > "$session_dir/workdir"
+        session_identity "$session" > "$session_dir/id"
 
         local histfile="$session_dir/history"
         if [[ -f "$histfile" ]]; then
@@ -97,7 +159,7 @@ cmd_save() {
         warn "No per-session history file for: ${missing_history[*]}"
         warn "New panes record history automatically once the hook is in ~/.bashrc."
         warn "To capture an existing session's current history, run INSIDE its pane:"
-        warn "    export HISTFILE=\"\$HOME/.tmuxsaver/sessions/\$(tmux display-message -p '#S')/history\""
+        warn "    export HISTFILE=\"$SAVE_DIR/<session>/history\"   # <session> as listed above"
         warn "    mkdir -p \"\$(dirname \"\$HISTFILE\")\" && history -w"
     fi
 }
@@ -117,12 +179,10 @@ cmd_restore() {
 
     local count=0
 
-    for session_dir in "$SAVE_DIR"/*/; do
-        [[ -d "$session_dir" ]] || continue
-        session_dir="${session_dir%/}"
-
+    local session_dir
+    while IFS= read -r session_dir; do
         local session
-        session=$(basename "$session_dir")
+        session=$(decode_name "$(basename "$session_dir")")
         local workdir_file="$session_dir/workdir"
         local histfile="$session_dir/history"
 
@@ -159,12 +219,15 @@ cmd_restore() {
         # and panes in this session pick up the same history file too.
         local env_args=()
         [[ -f "$histfile" ]] && env_args=(-e "HISTFILE=$histfile")
+        # A custom save dir (--dir / TMUXSAVER_DIR) must reach the shell hook
+        # too, or it would point HISTFILE back at the default location.
+        [[ -n "${TMUXSAVER_DIR:-}" ]] && env_args+=(-e "TMUXSAVER_DIR=$TMUXSAVER_DIR")
 
         tmux new-session -d -s "$session" -c "$workdir" ${env_args[@]+"${env_args[@]}"}
 
         info "Restored session '$session' at $workdir"
         count=$(( count + 1 ))
-    done
+    done < <(saved_session_dirs)
 
     info "Restored $count session(s)"
 }
@@ -176,18 +239,17 @@ cmd_restore() {
 cmd_list() {
     [[ -d "$SAVE_DIR" ]] || { echo "No saved sessions."; return 0; }
 
-    local found=0
-    for session_dir in "$SAVE_DIR"/*/; do
-        [[ -d "$session_dir" ]] || continue
+    local found=0 session_dir
+    while IFS= read -r session_dir; do
         local session
-        session=$(basename "$session_dir")
+        session=$(decode_name "$(basename "$session_dir")")
         local workdir="(unknown)"
         [[ -f "$session_dir/workdir" ]] && workdir=$(cat "$session_dir/workdir")
         local has_history="no"
         [[ -f "$session_dir/history" ]] && has_history="yes"
         printf "  %-20s  %s  (history: %s)\n" "$session" "$workdir" "$has_history"
         found=$(( found + 1 ))
-    done
+    done < <(saved_session_dirs)
 
     [[ $found -eq 0 ]] && echo "No saved sessions."
 }
@@ -220,16 +282,20 @@ cmd_forget() {
 
     local removed=0
     for name in "${FORGET_TARGETS[@]}"; do
-        # Only a plain session name is valid — reject anything that could
-        # escape SAVE_DIR (path separators or dot components).
-        if [[ "$name" == */* ]] || [[ "$name" == "." ]] || [[ "$name" == ".." ]] || [[ -z "$name" ]]; then
+        # Names are encoded ("/" -> %2F), so only "." and ".." could escape
+        # SAVE_DIR; tmux never creates those.
+        if [[ "$name" == "." ]] || [[ "$name" == ".." ]] || [[ -z "$name" ]]; then
             warn "Invalid session name: '$name'"
             continue
         fi
 
-        local dir="$SAVE_DIR/$name"
+        local enc dir
+        enc=$(encode_name "$name")
+        dir="$SAVE_DIR/$enc"
         if [[ -d "$dir" ]]; then
             rm -rf "$dir"
+            # Drop the links earlier names of this session left behind.
+            find "$SAVE_DIR" -maxdepth 1 -type l -lname "$enc" -delete
             info "Forgot saved session '$name'"
             removed=$(( removed + 1 ))
         else
@@ -502,6 +568,7 @@ while [[ $# -gt 0 ]]; do
         --dir)
             [[ -n "${2:-}" ]] || die "--dir requires a path argument"
             SAVE_DIR="$2/sessions"
+            export TMUXSAVER_DIR="$2"
             shift 2
             ;;
         --quiet|-q)
