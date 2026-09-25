@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: tmuxsaver
 Upstream-Contact: Koen Van der Kimpen <koen.vanderkimpen@smals.be>
-Source: https://github.com/kvanderkimpen/tmuxsaver
+Source: https://github.com/koenvdk/tmuxsaver
 
 Files: *
 Copyright: 2026 Koen Van der Kimpen

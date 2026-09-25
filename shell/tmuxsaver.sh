@@ -5,6 +5,9 @@ if [[ -n "${TMUX:-}" ]]; then
     # client", which can be a different session when several are attached.
     _ts_session=$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null)
     if [[ -n "$_ts_session" ]]; then
+        # Same directory naming as `tmuxsaver`: "%" -> %25, "/" -> %2F.
+        _ts_session=${_ts_session//\%/%25}   # \% : a bare % anchors to the end in zsh
+        _ts_session=${_ts_session//\//%2F}
         export HISTFILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions/$_ts_session/history"
         mkdir -p "$(dirname "$HISTFILE")"
         # Flush history to the per-session file after every command, not only

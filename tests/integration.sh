@@ -53,8 +53,12 @@ pane_last_line() { tmux capture-pane -p -t "=$1:" | grep -v '^$' | tail -1; }
 
 # Run a command in a session's shell and wait until the shell has written it
 # to the per-session history (PROMPT_COMMAND / INC_APPEND_HISTORY flush).
+enc() { local n=${1//\%/%25}; printf '%s' "${n//\//%2F}"; }
+
 run_in() {
-    local session=$1 cmd=$2 histfile=~/.tmuxsaver/sessions/$1/history tries=50
+    local session=$1 cmd=$2 tries=50
+    local histfile
+    histfile=~/.tmuxsaver/sessions/$(enc "$1")/history
     tmux send-keys -t "=$session:" "$cmd" Enter
     while (( tries-- > 0 )); do
         grep -qxF "$cmd" "$histfile" 2>/dev/null && return 0
@@ -94,6 +98,8 @@ user_setup() {
         check "setup starts tmuxsaver-save.service (ExecStop saves at logout)" \
             systemctl --user is-active -q tmuxsaver-save.service
         check "setup enables tmuxsaver-restore.service" systemctl --user is-enabled -q tmuxsaver-restore.service
+        check "save unit is ordered after restore (stops first at shutdown)" \
+            bash -c 'systemctl --user show -p After tmuxsaver-save.service | grep -q tmuxsaver-restore.service'
     else
         check "setup explains the skipped services" grep -q "No systemd user manager" <<<"$out"
     fi
@@ -156,6 +162,70 @@ user_symlinked_tmux_conf() {
         bash -c 'printf "set -g mouse on\n" | cmp -s - ~/dotfiles/tmux.conf'
     rm -rf ~/.tmux.conf ~/dotfiles
     tmuxsaver setup --no-linger -q >/dev/null 2>&1
+}
+
+# Session names with "/" and renamed sessions.
+user_names_and_renames() {
+    section "session names with / and renames (as $USER)"
+    tmux kill-server 2>/dev/null; rm -rf ~/.tmuxsaver
+
+    tmux new-session -d -s 'web/api' -x 160 -c /tmp
+    tmux new-session -d -s old -x 160 -c /tmp
+    wait_pane 'web/api' '\$ *$'
+    wait_pane old '\$ *$'
+    check "history for 'web/api' lands in its encoded dir" run_in 'web/api' 'cd /etc'
+    check "history for 'old' is recorded" run_in old 'echo before-rename'
+    tmuxsaver save -q
+
+    tmux rename-session -t =old new
+    local out
+    out=$(tmuxsaver save 2>&1)
+    check "save detects the rename" grep -q "renamed to 'new'" <<<"$out"
+    check "old name is left as a link" test -L ~/.tmuxsaver/sessions/old
+    check "history merged into the new name" grep -qx 'echo before-rename' ~/.tmuxsaver/sessions/new/history
+    # The pane's shell still has HISTFILE=.../old/history; via the link its
+    # new commands must reach the new name's history.
+    tmux send-keys -t =new: 'echo after-rename' Enter
+    local tries=50
+    until grep -qx 'echo after-rename' ~/.tmuxsaver/sessions/new/history 2>/dev/null || (( tries-- <= 0 )); do sleep 0.1; done
+    check "pre-rename shell keeps writing to the right history" \
+        grep -qx 'echo after-rename' ~/.tmuxsaver/sessions/new/history
+    check "list shows 'web/api' and 'new' only" \
+        bash -c 'out=$(tmuxsaver list); grep -q "web/api" <<<"$out" && grep -q " new " <<<"$out" && ! grep -q " old " <<<"$out"'
+
+    tmux kill-server
+    sleep 0.3
+    tmuxsaver restore -q
+    check "restore brings back exactly 'new' and 'web/api'" \
+        test "$(tmux ls -F '#S' | sort | tr '\n' ' ')" = "new web/api "
+    wait_pane new '\$ *$'
+    tmux send-keys -t =new: Up
+    check "renamed session's Up-arrow recalls the post-rename command" wait_pane new 'echo after-rename$' 20
+    check "'web/api' restored at /etc" test "$(tmux display -p -t '=web/api:' '#{pane_current_path}')" = /etc
+    tmux kill-server
+
+    tmuxsaver forget new >/dev/null 2>&1
+    check "forget also removes the old name's link" test ! -e ~/.tmuxsaver/sessions/old
+
+    check "save with no tmux server exits 0" tmuxsaver save -q
+}
+
+# --dir must reach the shell hook of restored sessions.
+user_custom_dir() {
+    section "--dir (as $USER)"
+    tmux kill-server 2>/dev/null
+    local dir=~/alt
+    rm -rf "$dir"; mkdir -p "$dir/sessions/cd1"
+    echo /tmp > "$dir/sessions/cd1/workdir"
+    echo 'echo from-custom-dir' > "$dir/sessions/cd1/history"
+    tmuxsaver restore --dir "$dir" -q
+    wait_pane cd1 '\$ *$'
+    tmux send-keys -t =cd1: ' echo "HF=$HISTFILE"' Enter
+    check "restored shell's HISTFILE is under --dir" wait_pane cd1 "HF=$dir/sessions/cd1/history" 20
+    tmux send-keys -t =cd1: Up Up
+    check "and its history came from --dir" wait_pane cd1 'echo from-custom-dir$' 20
+    tmux kill-server
+    rm -rf "$dir"
 }
 
 user_bash() {
@@ -355,6 +425,8 @@ as_user setup
 check ".bashrc still owned by the user" test "$(stat -c %U "$HOME_DIR/.bashrc")" = "$TEST_USER"
 as_user bash
 as_user zsh
+as_user names_and_renames
+as_user custom_dir
 as_user unsetup "$WORK/bashrc.orig" "$WORK/zshrc.orig"
 as_user bash_profile
 as_user symlinked_tmux_conf
