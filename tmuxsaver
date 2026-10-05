@@ -8,7 +8,7 @@
 #   unsetup           Undo `setup` (saved sessions are kept)
 #   save              Save all current tmux sessions
 #   restore           Restore previously saved sessions
-#   list              List saved sessions
+#   list              List saved sessions (running / closed)
 #   forget <name>...  Remove saved data for one or more sessions
 #   forget --closed   Remove saved data for every closed session
 #   reopen <name>...  Restore sessions you closed (they're skipped otherwise)
@@ -33,7 +33,7 @@ set -uo pipefail
 # is private to the user.
 umask 077
 
-TMUXSAVER_VERSION="0.6.0"
+TMUXSAVER_VERSION="0.6.1"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -297,7 +297,11 @@ cmd_list() {
         [[ -f "$session_dir/workdir" ]] && workdir=$(cat "$session_dir/workdir")
         local has_history="no" state=""
         [[ -f "$session_dir/history" ]] && has_history="yes"
-        is_closed "$session_dir" && state=", closed"
+        if tmux has-session -t "=$session" 2>/dev/null; then
+            state=", running"
+        elif is_closed "$session_dir"; then
+            state=", closed"
+        fi
         printf "  %-20s  %s  (history: %s%s)\n" "$session" "$workdir" "$has_history" "$state"
         found=$(( found + 1 ))
     done < <(saved_session_dirs)
@@ -375,9 +379,15 @@ cmd_forget() {
 # ignored: it can't be told apart from kill-server. (Closing your very last
 # session fires no hook at all.)
 cmd_closed() {
-    local name=${POSITIONAL[0]:-} left=${POSITIONAL[1]:-0}
-    [[ -n "$name" ]] || die "usage: tmuxsaver closed <session> <sessions-left>"
-    [[ "$left" =~ ^[0-9]+$ ]] && [[ "$left" -gt 0 ]] || return 0
+    local name=${POSITIONAL[0]:-} left=${POSITIONAL[1]:-}
+    [[ -n "$name" ]] || die "usage: tmuxsaver closed <session> [<sessions-left>]"
+    # #{server_sessions} only exists from tmux 3.4; older versions pass an
+    # empty string. Then ask the server: after a deliberate close the other
+    # sessions are still there, after kill-server it is gone or empty.
+    if [[ ! "$left" =~ ^[0-9]+$ ]]; then
+        left=$(tmux list-sessions 2>/dev/null | wc -l)
+    fi
+    [[ "$left" -gt 0 ]] || return 0
     local dir
     dir="$SAVE_DIR/$(encode_name "$name")"
     [[ -d "$dir" ]] || return 0
@@ -404,6 +414,7 @@ cmd_reopen() {
 # ---------------------------------------------------------------------------
 
 TMUX_HOOK_MARKER="# tmuxsaver: save on detach, forget on close"
+TMUX_HOOK_INDEX=77   # fixed hook slot; see cmd_setup_tmux
 
 # Path of the shell integration snippet: next to the binary first
 # (<prefix>/bin → <prefix>/share, as laid out by install.sh, `make install`
@@ -539,11 +550,15 @@ cmd_setup_tmux() {
     # ~/.local/bin, so a bare `tmuxsaver` would silently never run.
     local self hookline closeline=""
     self=$(self_path)
-    hookline="set-hook -ga client-detached \"run-shell -b \\\"'$self' save --quiet || true\\\"\""
-    # #{q:...} shell-quotes the name; #{server_sessions} is how many sessions
-    # remain, which lets `closed` ignore tmux kill-server.
+    # Hooks go in a fixed slot ([$TMUX_HOOK_INDEX]) rather than being
+    # appended: loading the config again (setup, `tmux source-file`) replaces
+    # them instead of piling up duplicates, and the user's own hooks for the
+    # same events stay untouched.
+    hookline="set-hook -g client-detached[$TMUX_HOOK_INDEX] \"run-shell -b \\\"'$self' save --quiet || true\\\"\""
+    # #{q:...} shell-quotes the name; #{server_sessions} (tmux 3.4+) is how
+    # many sessions remain, which lets `closed` ignore tmux kill-server.
     if [[ $KEEP_CLOSED -eq 0 ]]; then
-        closeline="set-hook -ga session-closed \"run-shell -b \\\"'$self' closed --quiet -- #{q:hook_session_name} #{server_sessions} || true\\\"\""
+        closeline="set-hook -g session-closed[$TMUX_HOOK_INDEX] \"run-shell -b \\\"'$self' closed --quiet -- #{q:hook_session_name} #{server_sessions} || true\\\"\""
     fi
 
     # Idempotent and migrating: drop any existing tmuxsaver hook (including
@@ -561,11 +576,42 @@ cmd_setup_tmux() {
     else
         info "Save-on-detach hook installed in $tmux_conf (closed sessions will be restored: --keep-closed)"
     fi
-    info "Reload a running server with: tmux source-file $tmux_conf"
+
+    # tmux reads ~/.tmux.conf only when its server starts. A server that is
+    # already running (and with lingering it may run for months) would keep
+    # the old hooks, so load the current ones into it directly.
+    if unload_live_hooks; then
+        local tmp
+        tmp=$(mktemp) || return 0
+        {
+            printf '%s\n' "$hookline"
+            [[ -n "$closeline" ]] && printf '%s\n' "$closeline"
+        } > "$tmp"
+        if tmux source-file "$tmp" 2>/dev/null; then
+            info "Loaded the hooks into the running tmux server"
+        else
+            warn "Could not load the hooks into the running tmux server; run: tmux source-file $tmux_conf"
+        fi
+        rm -f "$tmp"
+    fi
+}
+
+# Remove every tmuxsaver hook, at any index, from a running tmux server:
+# older versions appended theirs (-ga), so they can sit anywhere.
+# Returns 1 when no server is running.
+unload_live_hooks() {
+    tmux list-sessions &>/dev/null || return 1
+    local hook
+    while IFS= read -r hook; do
+        tmux set-hook -gu "$hook" 2>/dev/null
+    done < <(tmux show-hooks -g 2>/dev/null \
+             | awk '/tmuxsaver/ && match($1, /^(client-detached|session-closed)\[[0-9]+\]$/) { print $1 }')
+    return 0
 }
 
 remove_tmux_hook() {
     local tmux_conf="$HOME/.tmux.conf"
+    unload_live_hooks && info "Removed the hooks from the running tmux server"
     [[ -f "$tmux_conf" ]] && grep -q tmuxsaver "$tmux_conf" || return 0
     strip_tmux_hook "$tmux_conf" | overwrite "$tmux_conf"
     # An empty tmux.conf is equivalent to none; `setup` usually created it.
@@ -641,11 +687,12 @@ tmux_version_num() {
 }
 
 check_tmux_version() {
-    command -v tmux &>/dev/null || { warn "tmux is not installed; tmuxsaver needs tmux 3.0 or newer."; return; }
+    command -v tmux &>/dev/null || { warn "tmux is not installed; tmuxsaver needs tmux 3.2 or newer."; return; }
     local n
     n=$(tmux_version_num)
-    if [[ $n -gt 0 && $n -lt 300 ]]; then
-        warn "$(tmux -V) is too old: restoring sessions needs tmux 3.0 or newer."
+    # new-session -e (how restore hands a session its history file) is 3.2+.
+    if [[ $n -gt 0 && $n -lt 302 ]]; then
+        warn "$(tmux -V) is too old: restoring sessions needs tmux 3.2 or newer."
     fi
 }
 
@@ -656,7 +703,7 @@ cmd_status() {
 
     if command -v tmux &>/dev/null; then
         local n; n=$(tmux_version_num)
-        line="$(tmux -V)"; [[ $n -gt 0 && $n -lt 300 ]] && line+=" (too old: needs 3.0+)"
+        line="$(tmux -V)"; [[ $n -gt 0 && $n -lt 302 ]] && line+=" (too old: needs 3.2+)"
     else
         line="not installed"
     fi
@@ -687,8 +734,17 @@ cmd_status() {
         else
             line+=" (closed sessions are restored too)"
         fi
-        if tmux list-sessions &>/dev/null && ! tmux show-hooks -g 2>/dev/null | grep -q tmuxsaver; then
-            line+="; not loaded in the running server (run: tmux source-file ~/.tmux.conf)"
+        # tmux reads ~/.tmux.conf only at server start: check what the
+        # running server actually has, hook by hook.
+        if tmux list-sessions &>/dev/null; then
+            local live missing_live=""
+            live=$(tmux show-hooks -g 2>/dev/null | grep tmuxsaver)
+            grep -q '^client-detached' <<<"$live" || missing_live+=" save-on-detach"
+            if grep -q 'set-hook.*session-closed.*tmuxsaver' "$conf"; then
+                grep -q '^session-closed' <<<"$live" || missing_live+=" forget-on-close"
+            fi
+            [[ -n "$missing_live" ]] && \
+                line+="; NOT loaded in the running tmux server:$missing_live (run: tmuxsaver setup)"
         fi
     fi
     printf '  %-16s %s\n' "tmux hooks:" "$line"

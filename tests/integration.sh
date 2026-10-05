@@ -288,6 +288,10 @@ user_closed_sessions() {
     # the handler exactly as tmux does then (0 sessions left): no mark.
     tmuxsaver closed --quiet -- keepme 0
     check "a close that leaves 0 sessions (kill-server) is ignored" test ! -e ~/.tmuxsaver/sessions/keepme/closed
+    # tmux < 3.4 has no #{server_sessions}: the count arrives empty and the
+    # handler asks the server, which is gone here.
+    tmuxsaver closed --quiet -- keepme ''
+    check "without a count and without a server, nothing is marked" test ! -e ~/.tmuxsaver/sessions/keepme/closed
     tmuxsaver restore -q
     check "restore skips closed sessions" test "$(tmux ls -F '#S' | tr '\n' ' ')" = "keepme "
     tmuxsaver reopen gone -q
@@ -320,6 +324,50 @@ user_old_tmux_hook() {
         bash -c '[[ $(grep -c "^# tmuxsaver:" ~/.tmux.conf) == 1 && $(grep -c "set-hook.*tmuxsaver" ~/.tmux.conf) == 2 ]]'
     check "user settings kept" grep -qx 'set -g mouse on' ~/.tmux.conf
     rm -f ~/.tmux.conf
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+}
+
+# Upgrading while a tmux server keeps running (lingering): tmux reads
+# ~/.tmux.conf only at server start, so setup must load the new hooks into
+# the live server, or closed sessions are never marked.
+user_live_server_upgrade() {
+    section "setup with a tmux server already running (as $USER)"
+    tmux kill-server 2>/dev/null; rm -rf ~/.tmuxsaver
+    # The reported case: the server started with a pre-0.6 config (only the
+    # appended save hook) and keeps running; then 0.6.0's setup wrote both
+    # hooks to ~/.tmux.conf but never loaded them into that server.
+    printf '# tmuxsaver: save on detach\nset-hook -ga client-detached "run-shell -b \\"tmuxsaver save --quiet || true\\""\n' > ~/.tmux.conf
+    tmux new-session -d -s stay -x 160 -c /tmp
+    tmux new-session -d -s leaving -x 160 -c /tmp
+    tmuxsaver save -q
+    printf '# tmuxsaver: save on detach, forget on close\nset-hook -ga client-detached "run-shell -b \\"tmuxsaver save --quiet || true\\""\nset-hook -ga session-closed "run-shell -b \\"tmuxsaver closed --quiet -- #{q:hook_session_name} #{server_sessions} || true\\""\n' > ~/.tmux.conf
+    check "status flags the hook missing from the running server" \
+        bash -c 'tmuxsaver status | grep -q "NOT loaded in the running tmux server"'
+
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "setup loads both hooks into the running server" \
+        bash -c 'h=$(tmux show-hooks -g | grep tmuxsaver); grep -q "^client-detached" <<<"$h" && grep -q "^session-closed" <<<"$h"'
+    check "the old appended hook is replaced, not kept alongside" \
+        test "$(tmux show-hooks -g | grep -c '^client-detached.*tmuxsaver')" = 1
+    tmuxsaver setup --no-linger -q >/dev/null 2>&1
+    check "running setup again doesn't duplicate live hooks" \
+        test "$(tmux show-hooks -g | grep -c tmuxsaver)" = 2
+    check "status no longer flags anything" \
+        bash -c '! tmuxsaver status | grep -q "NOT loaded"'
+
+    wait_pane leaving '\$ *$'
+    tmux send-keys -t =leaving: 'exit' Enter
+    local tries=50
+    until [[ -f ~/.tmuxsaver/sessions/leaving/closed ]] || (( tries-- <= 0 )); do sleep 0.1; done
+    check "a session closed after setup is marked, without restarting tmux" \
+        test -f ~/.tmuxsaver/sessions/leaving/closed
+    check "list shows running and closed sessions" \
+        bash -c 'out=$(tmuxsaver list); grep -q "stay .*running" <<<"$out" && grep -q "leaving .*closed" <<<"$out"'
+
+    tmuxsaver unsetup -q >/dev/null 2>&1
+    check "unsetup removes the hooks from the running server" \
+        bash -c '! tmux show-hooks -g | grep -q tmuxsaver'
+    tmux kill-server
     tmuxsaver setup --no-linger -q >/dev/null 2>&1
 }
 
@@ -529,6 +577,7 @@ as_user names_and_renames
 as_user custom_dir
 as_user closed_sessions
 as_user old_tmux_hook
+as_user live_server_upgrade
 as_user unsetup "$WORK/bashrc.orig" "$WORK/zshrc.orig"
 as_user bash_profile
 as_user symlinked_tmux_conf
