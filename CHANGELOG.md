@@ -5,6 +5,36 @@ All notable changes to tmuxsaver. The format follows
 [semantic versioning](https://semver.org) (see "Compatibility promise" in the
 README).
 
+## [0.6.1]
+
+### Fixed
+- **Closed sessions weren't marked after upgrading to 0.6.0** while a tmux
+  server kept running (e.g. with lingering). tmux reads `~/.tmux.conf` only
+  when its server starts, so the new `session-closed` hook never reached the
+  running server. `setup` now loads the hooks into a running server itself,
+  and `unsetup` removes them from it.
+- On tmux older than 3.4, closing a session never marked it: the hook relied
+  on `#{server_sessions}`, which only exists from 3.4. The handler now asks
+  the server instead when the count is missing.
+- `status` reported the hooks as loaded when only the save hook was; it now
+  checks each hook in the running server.
+
+### Changed
+- The hooks now live in a fixed slot (`[77]`) instead of being appended, so
+  loading the config again (`setup`, `tmux source-file`) never duplicates them
+  and your own hooks for the same events are untouched. Run `tmuxsaver setup`
+  once to switch.
+- `list` shows which saved sessions are `running` right now.
+- **Minimum tmux is now 3.2.** Restore uses `new-session -e`, added in 3.2;
+  on 3.0/3.1 restore has failed since 0.4.15. `setup` and `status` warn on
+  older versions; the package depends on `tmux (>= 3.2)`.
+- CI also runs the end-to-end tests on tmux 3.2a.
+
+### After upgrading
+Sessions you closed before this fix weren't marked. Check `tmuxsaver list`
+for entries that are neither `running` nor `closed`; remove the ones you
+don't want back with `tmuxsaver forget <name>...`.
+
 ## [0.6.0]
 
 ### Added
@@ -98,6 +128,7 @@ Initial development: per-session history and working directory, save on
 detach, systemd save/restore services, `forget`, lingering by default.
 See the git history for details.
 
+[0.6.1]: https://github.com/koenvdk/tmuxsaver/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/koenvdk/tmuxsaver/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/koenvdk/tmuxsaver/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/koenvdk/tmuxsaver/compare/v0.5.0...v0.5.1

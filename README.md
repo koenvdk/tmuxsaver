@@ -22,7 +22,7 @@ On login, your saved tmux sessions are restored in the background — run `tmux 
 - **Linux with systemd** for automatic save-on-logout and restore-on-login.
   Without systemd (containers, WSL1, macOS) the tmux hooks and manual
   `tmuxsaver save` / `restore` still work.
-- **tmux 3.0 or newer**; `setup` and `status` warn about older versions.
+- **tmux 3.2 or newer** (Debian 12+, Ubuntu 22.04+); `setup` and `status` warn about older versions.
 - **bash 4+** to run tmuxsaver itself.
 - **bash or zsh** as your interactive shell for per-session history. Other
   shells (fish, …) get their working directories restored, but no history.
@@ -32,8 +32,8 @@ On login, your saved tmux sessions are restored in the background — run `tmux 
 ### Debian / Ubuntu (recommended)
 
 ```bash
-wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.6.0/tmuxsaver_0.6.0_all.deb
-sudo apt install /tmp/tmuxsaver_0.6.0_all.deb
+wget -P /tmp https://github.com/koenvdk/tmuxsaver/releases/download/v0.6.1/tmuxsaver_0.6.1_all.deb
+sudo apt install /tmp/tmuxsaver_0.6.1_all.deb
 ```
 
 > **Note:** `apt install` requires the file to be outside your home directory
@@ -71,7 +71,7 @@ Each user on the machine runs `tmuxsaver setup` for themselves.
 If you don't have `apt`, grab the source tarball from the same release and run the installer:
 
 ```bash
-VER=0.6.0
+VER=0.6.1
 wget -O /tmp/tmuxsaver.tar.gz "https://github.com/koenvdk/tmuxsaver/archive/refs/tags/v${VER}.tar.gz"
 tar -xzf /tmp/tmuxsaver.tar.gz -C /tmp
 cd /tmp/tmuxsaver-${VER}
@@ -106,11 +106,11 @@ reinstalls, and are only ever removed when you explicitly ask.
 
 ```bash
 # Update / reinstall (keeps saved sessions, never prompts)
-sudo apt install /tmp/tmuxsaver_0.6.0_all.deb
-sudo apt install --reinstall /tmp/tmuxsaver_0.6.0_all.deb
+sudo apt install /tmp/tmuxsaver_0.6.1_all.deb
+sudo apt install --reinstall /tmp/tmuxsaver_0.6.1_all.deb
 
 # Reinstall AND wipe saved sessions ("reinstallclean", opt-in)
-sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.6.0_all.deb
+sudo TMUXSAVER_PURGE_DATA=1 apt install --reinstall /tmp/tmuxsaver_0.6.1_all.deb
 
 # Uninstall. This undoes `tmuxsaver setup` for the user running sudo, and is
 # the only path that asks about removing saved sessions. Other users on the
@@ -119,7 +119,7 @@ sudo apt remove tmuxsaver
 ```
 
 > If `apt` doesn't pass the variable through to the package scripts, run the
-> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.6.0_all.deb`.
+> reinstallclean via dpkg directly: `sudo TMUXSAVER_PURGE_DATA=1 dpkg -i /tmp/tmuxsaver_0.6.1_all.deb`.
 > You can also wipe sessions any time with `tmuxsaver clean`.
 
 ## How it works
@@ -249,7 +249,7 @@ tmuxsaver setup-tmux        Add only the tmux hooks to ~/.tmux.conf
 Example `status`:
 
 ```
-tmuxsaver 0.6.0
+tmuxsaver 0.6.1
   tmux:            tmux 3.4
   save dir:        /home/you/.tmuxsaver/sessions (4 saved, 1 closed)
   shell hook:      ~/.bashrc, ~/.zshrc
@@ -308,7 +308,7 @@ make test    # end-to-end: builds the .deb, installs it for a throwaway user,
              # drives real tmux sessions in bash and zsh, uninstalls it
 ```
 
-`make test` needs root, `tmux` (3.0+), `zsh` and `dpkg-deb`, and it creates
+`make test` needs root, `tmux` (3.2+), `zsh` and `dpkg-deb`, and it creates
 and deletes a system user. Run it in a container or VM, not on your
 workstation. CI runs all three on every pull request.
 

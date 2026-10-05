@@ -20,6 +20,13 @@ jobs:
         run: make lint
 
   integration:
+    # The distro's tmux (newest) and the oldest supported one: 0.6.0 shipped
+    # bugs that only showed on tmux < 3.4 because CI ran just one version.
+    strategy:
+      fail-fast: false
+      matrix:
+        tmux: [system, 3.2a]
+    name: integration (tmux ${{ matrix.tmux }})
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +34,17 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q tmux zsh
-          tmux -V
+      - name: Build tmux ${{ matrix.tmux }} from source
+        if: matrix.tmux != 'system'
+        run: |
+          sudo apt-get install -y -q libevent-dev libncurses-dev bison pkg-config
+          curl -sSLf -o /tmp/tmux.tgz "https://github.com/tmux/tmux/releases/download/${{ matrix.tmux }}/tmux-${{ matrix.tmux }}.tar.gz"
+          tar -xzf /tmp/tmux.tgz -C /tmp
+          cd "/tmp/tmux-${{ matrix.tmux }}"
+          ./configure --prefix=/usr/local >/dev/null
+          make -j"$(nproc)" >/dev/null
+          sudo make install >/dev/null
+      - name: Show tmux version (as a login shell sees it)
+        run: sudo su - nobody -s /bin/sh -c 'tmux -V'
       - name: End-to-end tests (.deb install, bash/zsh save+restore, uninstall, install.sh)
         run: sudo tests/integration.sh
