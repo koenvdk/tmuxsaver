@@ -21,6 +21,7 @@ if [[ -n "${TMUX:-}" ]]; then
                 [[ "${PROMPT_COMMAND[*]}" == *"history -a"* ]] \
                     || PROMPT_COMMAND=("history -a" "${PROMPT_COMMAND[@]}")
             elif [[ "${PROMPT_COMMAND:-}" != *"history -a"* ]]; then
+                # shellcheck disable=SC2178,SC2128  # scalar here; the array case is above
                 PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
             fi
         elif [[ -n "${ZSH_VERSION:-}" ]]; then
