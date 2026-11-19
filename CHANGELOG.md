@@ -25,6 +25,10 @@ README).
   last pane exited first looked like one you closed, and restore then skipped
   it. Closes are now ignored while the system (or your user manager) is
   shutting down. Sessions already marked this way: `tmuxsaver reopen <name>`.
+- **History wasn't written per command when `PROMPT_COMMAND` is an array**
+  (for example on Ubuntu 26.04, whose `/etc/profile.d` sets it that way). The
+  shell hook left arrays alone, so history only reached the session's file
+  when the shell exited. It now prepends its flush to the array too.
 
 ## [0.6.1]
 
