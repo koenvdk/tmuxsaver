@@ -5,6 +5,18 @@ All notable changes to tmuxsaver. The format follows
 [semantic versioning](https://semver.org) (see "Compatibility promise" in the
 README).
 
+## [0.7.0]
+
+### Added
+- **`tmuxsaver update`** looks up the latest release and installs it. For the
+  .deb it downloads the package and runs `apt install` itself when you are
+  root; otherwise it stops at the `sudo apt install ...` line to run. For a
+  `~/.local` install it downloads the release and re-runs `install.sh`.
+  `tmuxsaver update --check` only reports.
+- **Update notice:** interactive commands (not hooks or services) mention a
+  newer release at most once a week, checked in the background. Turn it off
+  with `TMUXSAVER_NO_UPDATE_CHECK=1`.
+
 ## [0.6.2]
 
 ### Fixed
