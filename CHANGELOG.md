@@ -5,6 +5,15 @@ All notable changes to tmuxsaver. The format follows
 [semantic versioning](https://semver.org) (see "Compatibility promise" in the
 README).
 
+## [0.6.2]
+
+### Fixed
+- **Sessions were marked closed by a reboot.** At shutdown the processes in
+  the panes are signalled together with the tmux server, so a session whose
+  last pane exited first looked like one you closed, and restore then skipped
+  it. Closes are now ignored while the system (or your user manager) is
+  shutting down. Sessions already marked this way: `tmuxsaver reopen <name>`.
+
 ## [0.6.1]
 
 ### Fixed
