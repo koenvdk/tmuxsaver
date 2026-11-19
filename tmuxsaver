@@ -33,7 +33,7 @@ set -uo pipefail
 # is private to the user.
 umask 077
 
-TMUXSAVER_VERSION="0.6.1"
+TMUXSAVER_VERSION="0.6.2"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -372,6 +372,16 @@ cmd_forget() {
 # Closed sessions
 # ---------------------------------------------------------------------------
 
+# True while the system or this user's systemd manager is shutting down.
+shutting_down() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    local state
+    state=$(timeout 2 systemctl is-system-running 2>/dev/null)
+    [[ "$state" == stopping ]] && return 0
+    state=$(timeout 2 systemctl --user is-system-running 2>/dev/null)
+    [[ "$state" == stopping ]]
+}
+
 # Called by tmux's session-closed hook: `closed <name> <sessions-left>`.
 # tmux fires that hook for a deliberate close (exit / kill-session), not at
 # logout or shutdown. `tmux kill-server` fires it too, for some sessions, and
@@ -381,6 +391,10 @@ cmd_forget() {
 cmd_closed() {
     local name=${POSITIONAL[0]:-} left=${POSITIONAL[1]:-}
     [[ -n "$name" ]] || die "usage: tmuxsaver closed <session> [<sessions-left>]"
+    # At reboot/poweroff the panes' processes get SIGTERM alongside the tmux
+    # server, so some sessions close while others are still alive. That is not
+    # the user closing them.
+    if shutting_down; then return 0; fi
     # #{server_sessions} only exists from tmux 3.4; older versions pass an
     # empty string. Then ask the server: after a deliberate close the other
     # sessions are still there, after kill-server it is gone or empty.

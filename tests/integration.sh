@@ -292,6 +292,13 @@ user_closed_sessions() {
     # handler asks the server, which is gone here.
     tmuxsaver closed --quiet -- keepme ''
     check "without a count and without a server, nothing is marked" test ! -e ~/.tmuxsaver/sessions/keepme/closed
+    # During reboot some panes die before the server; sessions that close
+    # then must not be marked, even though other sessions are still alive.
+    local stub; stub=$(mktemp -d)
+    printf '#!/bin/sh\necho stopping\n' > "$stub/systemctl"; chmod +x "$stub/systemctl"
+    PATH="$stub:$PATH" tmuxsaver closed --quiet -- keepme 3
+    check "a close during system shutdown is not marked" test ! -e ~/.tmuxsaver/sessions/keepme/closed
+    rm -rf "$stub"
     tmuxsaver restore -q
     check "restore skips closed sessions" test "$(tmux ls -F '#S' | tr '\n' ' ')" = "keepme "
     tmuxsaver reopen gone -q
