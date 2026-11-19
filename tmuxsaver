@@ -13,6 +13,7 @@
 #   forget --closed   Remove saved data for every closed session
 #   reopen <name>...  Restore sessions you closed (they're skipped otherwise)
 #   status            Show what is set up and whether history is recorded
+#   update            Download and install the latest release (--check: only look)
 #   clean             Remove all saved session data
 #   setup-shell       Print the shell integration snippet
 #   setup-tmux        Add only the tmux hooks to ~/.tmux.conf
@@ -25,7 +26,12 @@
 #   --no-systemd      setup: skip the systemd user services
 #   --no-linger       setup: don't enable lingering
 #   --keep-closed     setup: restore closed sessions too (don't mark them closed)
+#   --check           update: only report whether a newer release exists
 #   --version, -v     Print the version
+#
+# Interactive commands mention a newer release at most once a week, from a
+# background check of the GitHub releases API. Disable it with
+# TMUXSAVER_NO_UPDATE_CHECK=1.
 
 set -uo pipefail
 
@@ -33,7 +39,7 @@ set -uo pipefail
 # is private to the user.
 umask 077
 
-TMUXSAVER_VERSION="0.6.2"
+TMUXSAVER_VERSION="0.7.0"
 SAVE_DIR="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/sessions"
 QUIET=0
 
@@ -421,6 +427,122 @@ cmd_reopen() {
         fi
     done
     cmd_restore
+}
+
+# ---------------------------------------------------------------------------
+# Updates
+# ---------------------------------------------------------------------------
+
+UPDATE_API="${TMUXSAVER_UPDATE_URL:-https://api.github.com/repos/koenvdk/tmuxsaver/releases/latest}"
+DOWNLOAD_BASE="${TMUXSAVER_DOWNLOAD_BASE:-https://github.com/koenvdk/tmuxsaver/releases/download}"
+SOURCE_BASE="${TMUXSAVER_SOURCE_URL:-https://github.com/koenvdk/tmuxsaver/archive/refs/tags}"
+UPDATE_CHECK_FILE="${TMUXSAVER_DIR:-$HOME/.tmuxsaver}/update-check"
+UPDATE_CHECK_INTERVAL=$(( 7 * 24 * 3600 ))
+
+# fetch <url> [outfile]: print the body, or save it to outfile.
+fetch() {
+    local url=$1 out=${2:-}
+    if command -v curl >/dev/null 2>&1; then
+        if [[ -n "$out" ]]; then curl -fsSL --max-time 60 -o "$out" "$url"
+        else curl -fsSL --max-time 8 "$url"; fi
+    elif command -v wget >/dev/null 2>&1; then
+        if [[ -n "$out" ]]; then wget -q -T 60 -O "$out" "$url"
+        else wget -q -T 8 -O - "$url"; fi
+    else
+        return 1
+    fi
+}
+
+# Version number of the latest GitHub release, e.g. 0.7.0 (empty on failure).
+latest_version() {
+    local body
+    body=$(fetch "$UPDATE_API") || return 1
+    sed -n 's/.*"tag_name": *"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' <<<"$body" | head -1
+}
+
+# version_gt A B: true if A is a newer version than B.
+version_gt() {
+    [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" ]]
+}
+
+refresh_update_cache() {
+    local latest prev
+    prev=$(cut -d' ' -f2 "$UPDATE_CHECK_FILE" 2>/dev/null)
+    latest=$(latest_version) || latest=""
+    [[ -n "$latest" ]] || latest=$prev
+    # The time is stored even when the lookup failed, so being offline
+    # doesn't retry on every command.
+    printf '%s %s\n' "$(date +%s)" "$latest" > "$UPDATE_CHECK_FILE.$$" \
+        && mv -f "$UPDATE_CHECK_FILE.$$" "$UPDATE_CHECK_FILE"
+}
+
+# For interactive commands: mention a newer release known from the last check,
+# and refresh that check in the background when it is over a week old.
+maybe_notify_update() {
+    [[ $QUIET -eq 0 && -t 2 && -z "${TMUXSAVER_NO_UPDATE_CHECK:-}" ]] || return 0
+    local checked="" latest=""
+    read -r checked latest < "$UPDATE_CHECK_FILE" 2>/dev/null || true
+    if [[ -n "$latest" ]] && version_gt "$latest" "$TMUXSAVER_VERSION"; then
+        info "Version $latest is available (you have $TMUXSAVER_VERSION). Update with: tmuxsaver update"
+    fi
+    if [[ ! "$checked" =~ ^[0-9]+$ ]] || (( $(date +%s) - checked > UPDATE_CHECK_INTERVAL )); then
+        mkdir -p "$(dirname "$UPDATE_CHECK_FILE")" 2>/dev/null || return 0
+        ( refresh_update_cache ) >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+    fi
+}
+
+cmd_update() {
+    local latest self prefix tmp
+    latest=$(latest_version) || latest=""
+    [[ -n "$latest" ]] || die "could not look up the latest release (is curl or wget installed, and are you online?)"
+    mkdir -p "$(dirname "$UPDATE_CHECK_FILE")" 2>/dev/null \
+        && printf '%s %s\n' "$(date +%s)" "$latest" > "$UPDATE_CHECK_FILE"
+    if ! version_gt "$latest" "$TMUXSAVER_VERSION"; then
+        info "tmuxsaver $TMUXSAVER_VERSION is up to date"
+        return 0
+    fi
+    info "Update available: $TMUXSAVER_VERSION -> $latest"
+    [[ $CHECK_ONLY -eq 0 ]] || { info "Run 'tmuxsaver update' to install it"; return 0; }
+
+    self=$(realpath "$0" 2>/dev/null || echo "$0")
+    # A scratch directory the apt sandbox user can read (mktemp makes it 0700).
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/tmuxsaver-update.XXXXXX") || die "cannot create a temporary directory"
+    chmod 755 "$tmp"
+
+    if [[ "$self" == /usr/bin/tmuxsaver ]] && command -v dpkg-query >/dev/null 2>&1 \
+        && [[ "$(dpkg-query -W -f='${Status}' tmuxsaver 2>/dev/null)" == *"install ok installed" ]]; then
+        local deb="$tmp/tmuxsaver_${latest}_all.deb"
+        info "Downloading tmuxsaver_${latest}_all.deb"
+        fetch "$DOWNLOAD_BASE/v$latest/tmuxsaver_${latest}_all.deb" "$deb" \
+            || die "download failed: $DOWNLOAD_BASE/v$latest/tmuxsaver_${latest}_all.deb"
+        chmod 644 "$deb"
+        if [[ $EUID -eq 0 ]]; then
+            apt install -y "$deb" || die "apt install failed"
+            rm -rf "$tmp"
+            info "Updated to $latest"
+        else
+            info "Downloaded. Installing needs root; run:"
+            echo "sudo apt install $deb"
+        fi
+        return 0
+    fi
+
+    if [[ -d "$(dirname "$self")/.git" || -d "$(dirname "$self")/../.git" ]]; then
+        die "this is a git checkout: update it with 'git pull' and run ./install.sh"
+    fi
+    [[ "$(basename "$(dirname "$self")")" == bin ]] \
+        || die "cannot tell how tmuxsaver was installed ($self); see the README to update it by hand"
+    prefix=$(dirname "$(dirname "$self")")
+    [[ -w "$prefix/bin" ]] \
+        || die "cannot write to $prefix/bin; update as a user who can, or see the README"
+    info "Downloading tmuxsaver $latest"
+    fetch "$SOURCE_BASE/v$latest.tar.gz" "$tmp/src.tar.gz" || die "download failed: $SOURCE_BASE/v$latest.tar.gz"
+    tar -xzf "$tmp/src.tar.gz" -C "$tmp" || die "could not unpack the download"
+    ( cd "$tmp/tmuxsaver-$latest" && bash ./install.sh --prefix "$prefix" ) \
+        || die "install.sh failed; the download is kept in $tmp"
+    rm -rf "$tmp"
+    info "Updated to $latest"
 }
 
 # ---------------------------------------------------------------------------
@@ -827,6 +949,7 @@ FORGET_TARGETS=()
 POSITIONAL=()
 FORGET_CLOSED=0
 KEEP_CLOSED=0
+CHECK_ONLY=0
 DO_SHELL=1
 DO_TMUX=1
 DO_SYSTEMD=1
@@ -863,6 +986,7 @@ while [[ $# -gt 0 ]]; do
         --no-linger)     DO_LINGER=0;   shift ;;
         --keep-closed)   KEEP_CLOSED=1; shift ;;
         --closed)        FORGET_CLOSED=1; shift ;;
+        --check)         CHECK_ONLY=1;  shift ;;
         --version|-v)
             echo "tmuxsaver $TMUXSAVER_VERSION"
             exit 0
@@ -877,7 +1001,7 @@ while [[ $# -gt 0 ]]; do
         *)
             if [[ -z "$COMMAND" ]]; then
                 case "$1" in
-                    save|restore|list|clean|forget|reopen|closed|status|setup|unsetup|setup-shell|setup-tmux)
+                    save|restore|list|clean|forget|reopen|closed|status|update|setup|unsetup|setup-shell|setup-tmux)
                         COMMAND="$1" ;;
                     *) die "Unknown command: $1 (try --help)" ;;
                 esac
@@ -891,6 +1015,8 @@ done
 
 [[ -n "$COMMAND" ]] || { usage; exit 1; }
 
+[[ "$COMMAND" == update || "$COMMAND" == closed ]] || maybe_notify_update
+
 case "$COMMAND" in
     save)         cmd_save ;;
     restore)      cmd_restore ;;
@@ -899,6 +1025,7 @@ case "$COMMAND" in
     reopen)       cmd_reopen ;;
     closed)       cmd_closed ;;
     status)       cmd_status ;;
+    update)       cmd_update ;;
     clean)        cmd_clean ;;
     setup)        cmd_setup ;;
     unsetup)      cmd_unsetup ;;

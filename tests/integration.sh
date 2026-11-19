@@ -256,6 +256,29 @@ user_custom_dir() {
     rm -rf "$dir"
 }
 
+# update: looks up the latest release, downloads the .deb and, without root,
+# stops at the sudo command. Uses local files instead of GitHub.
+user_update() {
+    section "update (as $USER)"
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        echo "  skip  neither curl nor wget available"; return 0
+    fi
+    local rel; rel=$(mktemp -d)
+    mkdir -p "$rel/v9.9.9"
+    echo 'fake deb' > "$rel/v9.9.9/tmuxsaver_9.9.9_all.deb"
+    export TMUXSAVER_UPDATE_URL="file://$rel/latest.json" TMUXSAVER_DOWNLOAD_BASE="file://$rel"
+    printf '{\n  "tag_name": "v9.9.9"\n}\n' > "$rel/latest.json"
+    check "update --check reports a newer release" bash -c 'tmuxsaver update --check 2>&1 | grep -q "Update available: .* -> 9.9.9"'
+    local out; out=$(tmuxsaver update 2>/dev/null)
+    check "update stops at the sudo apt command" bash -c '[[ "$1" == "sudo apt install /"*/tmuxsaver_9.9.9_all.deb ]]' _ "$out"
+    check "update downloaded the package" test -f "${out#sudo apt install }"
+    printf '{"tag_name": "v0.0.1"}' > "$rel/latest.json"
+    check "update says up to date when current" bash -c 'tmuxsaver update 2>&1 | grep -q "is up to date"'
+    check "update prints no sudo command when current" bash -c '! tmuxsaver update 2>/dev/null | grep -q sudo'
+    rm -rf "$rel" "${out#sudo apt install }" 2>/dev/null
+    unset TMUXSAVER_UPDATE_URL TMUXSAVER_DOWNLOAD_BASE
+}
+
 # Forget-on-close: sessions you close yourself are not restored; logout,
 # shutdown and kill-server never mark anything.
 user_closed_sessions() {
@@ -583,6 +606,7 @@ as_user zsh
 as_user names_and_renames
 as_user custom_dir
 as_user closed_sessions
+as_user update
 as_user old_tmux_hook
 as_user live_server_upgrade
 as_user unsetup "$WORK/bashrc.orig" "$WORK/zshrc.orig"
