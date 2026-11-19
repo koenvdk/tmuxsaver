@@ -14,10 +14,13 @@ if [[ -n "${TMUX:-}" ]]; then
         # on shell exit — so a long-running session's history is always on disk
         # and `tmuxsaver save` never reports it missing.
         if [[ -n "${BASH_VERSION:-}" ]]; then
-            # Scalar PROMPT_COMMAND only; if it's an array (rare) leave it alone
-            # and fall back to the on-exit write. Idempotent across re-sourcing.
-            if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" != "declare -a"* ]] \
-               && [[ "${PROMPT_COMMAND:-}" != *"history -a"* ]]; then
+            # PROMPT_COMMAND may be a scalar or, from bash 5.1 (and on systems
+            # whose /etc/profile.d sets it, e.g. Ubuntu 26.04), an array.
+            # Idempotent across re-sourcing.
+            if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+                [[ "${PROMPT_COMMAND[*]}" == *"history -a"* ]] \
+                    || PROMPT_COMMAND=("history -a" "${PROMPT_COMMAND[@]}")
+            elif [[ "${PROMPT_COMMAND:-}" != *"history -a"* ]]; then
                 PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
             fi
         elif [[ -n "${ZSH_VERSION:-}" ]]; then
